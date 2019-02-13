@@ -7,30 +7,25 @@ use std::env;
 use nix::sys::ptrace;
 use nix::unistd;
 
-fn main() {
+fn main() -> Result<(), &'static str> {
     let mut args = env::args();
-    if args.len() <= 1 {
-        eprintln!("Please specify an executable to run");
-        return;
-    }
+    
+    // Get first argument if possible (child command)
+    let child_cmd = args.nth(1).ok_or("Please specify the name and arguments for the child process to execute")?;
 
-    let child_cmd = match args.nth(1) {
-        None => {
-            eprintln!("Unable to get name of child process to execute");
-            return;
-        },
-        Some(s) => s,
-    };
+    // Fork this process
+    let fork_res = unistd::fork().map_err(|_| "Unable to fork")?;
 
-    match unistd::fork().expect("unable to fork") {
+    match fork_res {
         unistd::ForkResult::Parent{ child } => {
             eprintln!("Tracing child process {} ({})", child, child_cmd);
 
             // Wait for child and set trace options
             child_process::wait_child(child);
-            ptrace::setoptions(child, ptrace::Options::PTRACE_O_EXITKILL).expect("Unable to set PTRACE_O_EXITKILL option");
+            ptrace::setoptions(child, ptrace::Options::PTRACE_O_EXITKILL)
+                .map_err(|_| "Unable to set PTRACE_O_EXITKILL option for child process")?;
 
-            // Execute syscall wait loop
+            // Execute main child process control loop
             let end_state = child_process::child_loop(child);
 
             // Print the child process's final state report
@@ -40,4 +35,6 @@ fn main() {
             child_process::exec_child(child_cmd, args);
         },
     };
+
+    Ok(())
 }
