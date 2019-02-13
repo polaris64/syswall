@@ -44,23 +44,23 @@ impl From<&UserResponse> for String {
     }
 }
 
-pub fn get_user_input(default: UserResponse) -> UserResponse {
+pub fn get_user_input(default: UserResponse) -> Result<UserResponse, &'static str> {
     let mut buffer = String::new();
     let def_str: String = String::from(&default);
     loop {
         eprint!(" - Choice (\"{}\" default, ? for help): ", def_str);
         buffer.clear();
-        io::stdin().read_line(&mut buffer).expect("Unable to read from stdin");
+        io::stdin().read_line(&mut buffer).map_err(|_| "Unable to read from stdin")?;
         let inp = buffer.trim();
         let resp = UserResponse::from(inp);
         match resp {
             UserResponse::ShowCommands => show_commands(),
-            UserResponse::Empty => return default,
+            UserResponse::Empty => return Ok(default),
             UserResponse::Unknown(s) => {
                 eprintln!("Unknown command \"{}\"", s);
                 show_commands();
             },
-            _ => return resp,
+            _ => return Ok(resp),
         }
     }
 }

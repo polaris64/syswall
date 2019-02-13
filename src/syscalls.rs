@@ -39,15 +39,17 @@ pub fn handle_pre_syscall(
 
             eprintln!(" - FD {}: {:?}", regs.rdi, state.file_by_fd(regs.rdi as usize));
 
-            res = syscall_choice(config, pid, syscall_id, regs);
+            res = syscall_choice(config, pid, syscall_id, regs).unwrap_or(HandleSyscallResult::Unchanged);
         },
         1 => { // write
             eprintln!("Child process {} will write {} bytes to FD {} from buffer at 0x{:X}", pid, regs.rdx, regs.rdi, regs.rsi);
 
-            eprint!(" - Child wants to write: ");
-            eprintln!("{:?}", child_process::get_child_buffer(pid, regs.rsi as usize, regs.rdx as usize));
+            match child_process::get_child_buffer(pid, regs.rsi as usize, regs.rdx as usize) {
+                Ok(buf) => eprintln!(" - Child wants to write: {:?}", buf),
+                Err(e)  => eprintln!(" - ERROR: unable to read from child process buffer: {}", e),
+            };
 
-            res = syscall_choice(config, pid, syscall_id, regs);
+            res = syscall_choice(config, pid, syscall_id, regs).unwrap_or(HandleSyscallResult::Unchanged);
         },
         2 => { // open
             eprintln!(
@@ -57,14 +59,17 @@ pub fn handle_pre_syscall(
                 OFlag::from_bits(regs.rdx as libc::c_int),
             );
 
-            eprint!("File path: ");
-            let filepath = child_process::get_child_buffer_cstr(pid, regs.rdi as usize);
-            eprintln!("{:?}", filepath);
+            match child_process::get_child_buffer_cstr(pid, regs.rdi as usize) {
+                Ok(filepath) => {
+                    eprintln!(" - File path: {:?}", filepath);
 
-            // Add file to state
-            state.add_pending_file(&filepath, regs.rsi as isize, regs.rdx as isize);
+                    // Add file to state
+                    state.add_pending_file(&filepath, regs.rsi as isize, regs.rdx as isize);
+                },
+                Err(e) => eprintln!(" - ERROR: could not get file path: {}", e),
+            };
 
-            res = syscall_choice(config, pid, syscall_id, regs);
+            res = syscall_choice(config, pid, syscall_id, regs).unwrap_or(HandleSyscallResult::Unchanged);
         },
         3 => { // close
             eprintln!("Child process {} wants to close FD {}", pid, regs.rdi);
@@ -79,14 +84,17 @@ pub fn handle_pre_syscall(
                 regs.rdi,
             );
 
-            eprint!(" - File path: ");
-            let filepath = child_process::get_child_buffer_cstr(pid, regs.rsi as usize);
-            eprintln!("{:?}", filepath);
+            match child_process::get_child_buffer_cstr(pid, regs.rsi as usize) {
+                Ok(filepath) => {
+                    eprintln!(" - File path: {:?}", filepath);
 
-            // Add file to state
-            state.add_pending_file(&filepath, regs.rdx as isize, regs.r10 as isize);
+                    // Add file to state
+                    state.add_pending_file(&filepath, regs.rdx as isize, regs.r10 as isize);
+                },
+                Err(e) => eprintln!(" - ERROR: could not get file path: {}", e),
+            };
 
-            res = syscall_choice(config, pid, syscall_id, regs);
+            res = syscall_choice(config, pid, syscall_id, regs).unwrap_or(HandleSyscallResult::Unchanged);
         },
         _ => (),
     }
@@ -103,36 +111,37 @@ pub fn handle_post_syscall(
 ) {
     match pre_result {
         HandleSyscallResult::BlockedHard => {
-            update_regs_hard_block(pid, regs);
-            match syscall_id {
-                2 => { // open
-                    // Set the pending file open as blocked
-                    state.update_pending_file_state(ProcessFileState::OpenBlockedHard);
-                },
-                257 => { // openat
-                    // Set the pending file open as blocked
-                    state.update_pending_file_state(ProcessFileState::OpenBlockedHard);
-                },
-                _ => (),
-            }
+            if let Ok(()) = update_regs_hard_block(pid, regs) {
+                match syscall_id {
+                    2 => { // open
+                        // Set the pending file open as blocked
+                        state.update_pending_file_state(ProcessFileState::OpenBlockedHard);
+                    },
+                    257 => { // openat
+                        // Set the pending file open as blocked
+                        state.update_pending_file_state(ProcessFileState::OpenBlockedHard);
+                    },
+                    _ => (),
+                };
+            };
         },
         HandleSyscallResult::BlockedSoft => {
             match syscall_id {
                 0 => { // read
                     // Set return value to number of bytes intended to be read to simulate success
                     regs.rax = regs.rdx;
-                    update_registers(pid, regs);
+                    update_registers(pid, regs).unwrap_or_else(|e| eprintln!("{}", e));
                 },
                 1 => { // write
                     // Set return value to number of bytes intended to be written to simulate
                     // success
                     regs.rax = regs.rdx;
-                    update_registers(pid, regs);
+                    update_registers(pid, regs).unwrap_or_else(|e| eprintln!("{}", e));
                 },
                 2 => { // open
                     // TODO: simulate open return
                     regs.rax = 5;
-                    update_registers(pid, regs);
+                    update_registers(pid, regs).unwrap_or_else(|e| eprintln!("{}", e));
 
                     // Set the pending file open as blocked
                     state.update_pending_file_state(ProcessFileState::OpenBlockedSoft);
@@ -140,7 +149,7 @@ pub fn handle_post_syscall(
                 257 => { // openat
                     // TODO: simulate openat return
                     regs.rax = 5;
-                    update_registers(pid, regs);
+                    update_registers(pid, regs).unwrap_or_else(|e| eprintln!("{}", e));
 
                     // Set the pending file open as blocked
                     state.update_pending_file_state(ProcessFileState::OpenBlockedSoft);
@@ -189,7 +198,12 @@ pub fn handle_post_syscall(
     }
 }
 
-fn syscall_choice(config: &mut SyscallConfigMap, pid: unistd::Pid, syscall_id: u64, regs: &mut SyscallRegs) -> HandleSyscallResult {
+fn syscall_choice(
+    config:     &mut SyscallConfigMap,
+    pid:        unistd::Pid,
+    syscall_id: u64,
+    regs:       &mut SyscallRegs,
+) -> Result<HandleSyscallResult, &'static str> {
     let mut res = HandleSyscallResult::Unchanged;
 
     match config.get(&(syscall_id as usize)) {
@@ -200,57 +214,63 @@ fn syscall_choice(config: &mut SyscallConfigMap, pid: unistd::Pid, syscall_id: u
                 },
                 SyscallConfig::HardBlocked => {
                     eprintln!(" - Hard-blocked by configuration");
-                    block_syscall(pid, regs);
-                    res = HandleSyscallResult::BlockedHard;
+                    if let Ok(()) = block_syscall(pid, regs) {
+                        res = HandleSyscallResult::BlockedHard;
+                    }
                 },
                 SyscallConfig::SoftBlocked => {
                     eprintln!(" - Soft-blocked by configuration");
-                    block_syscall(pid, regs);
-                    res = HandleSyscallResult::BlockedSoft;
+                    if let Ok(()) = block_syscall(pid, regs) {
+                        res = HandleSyscallResult::BlockedSoft;
+                    }
                 },
             }
         },
         None => {
-            match cli::get_user_input(cli::UserResponse::AllowOnce) {
+            match cli::get_user_input(cli::UserResponse::AllowOnce)? {
                 cli::UserResponse::AllowAllSyscall => {
                     *config.entry(syscall_id as usize).or_insert(SyscallConfig::Allowed) = SyscallConfig::Allowed;
                 },
                 cli::UserResponse::BlockAllSyscallHard => {
-                    block_syscall(pid, regs);
-                    res = HandleSyscallResult::BlockedHard;
+                    if let Ok(()) = block_syscall(pid, regs) {
+                        res = HandleSyscallResult::BlockedHard;
+                    }
                     *config.entry(syscall_id as usize).or_insert(SyscallConfig::HardBlocked) = SyscallConfig::HardBlocked;
                 },
                 cli::UserResponse::BlockOnceHard => {
-                    block_syscall(pid, regs);
-                    res = HandleSyscallResult::BlockedHard;
+                    if let Ok(()) = block_syscall(pid, regs) {
+                        res = HandleSyscallResult::BlockedHard;
+                    }
                 },
                 cli::UserResponse::BlockAllSyscallSoft => {
-                    block_syscall(pid, regs);
-                    res = HandleSyscallResult::BlockedSoft;
+                    if let Ok(()) = block_syscall(pid, regs) {
+                        res = HandleSyscallResult::BlockedSoft;
+                    }
                     *config.entry(syscall_id as usize).or_insert(SyscallConfig::SoftBlocked) = SyscallConfig::SoftBlocked;
                 },
                 cli::UserResponse::BlockOnceSoft => {
-                    block_syscall(pid, regs);
-                    res = HandleSyscallResult::BlockedSoft;
+                    if let Ok(()) = block_syscall(pid, regs) {
+                        res = HandleSyscallResult::BlockedSoft;
+                    }
                 },
                 _ => (),
             }
         }
     }
 
-    res
+    Ok(res)
 }
 
-fn update_registers(pid: unistd::Pid, regs: &SyscallRegs) {
-    ptrace::setregs(pid, *regs).expect("Unable to modify syscall registers");
+fn update_registers(pid: unistd::Pid, regs: &SyscallRegs) -> Result<(), &'static str> {
+    ptrace::setregs(pid, *regs).map_err(|_| "Unable to modify syscall registers")
 }
 
-fn update_regs_hard_block(pid: unistd::Pid, regs: &mut SyscallRegs) {
+fn update_regs_hard_block(pid: unistd::Pid, regs: &mut SyscallRegs) -> Result<(), &'static str> {
     regs.rax = (-libc::EPERM) as u64;
-    update_registers(pid, regs);
+    update_registers(pid, regs)
 }
 
-fn block_syscall(pid: unistd::Pid, regs: &mut SyscallRegs) {
+fn block_syscall(pid: unistd::Pid, regs: &mut SyscallRegs) -> Result<(), &'static str> {
     regs.orig_rax = std::u64::MAX;
-    update_registers(pid, regs);
+    update_registers(pid, regs)
 }
