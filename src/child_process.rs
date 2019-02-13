@@ -4,42 +4,9 @@ use nix::unistd;
 use nix::sys::ptrace;
 use nix::sys::uio;
 use nix::sys::wait;
+
+use crate::process_state::{ProcessState};
 use crate::syscalls;
-
-enum ProcessFileState {
-    Opened,
-    Closed,
-    CouldNotOpen,
-}
-
-enum ProcessFileMode {
-    RO,
-    RW,
-    WO,
-}
-
-enum ProcessFileFlags {
-    Unknown,
-}
-
-struct ProcessFileRec {
-    state: ProcessFileState,
-    filename: String,
-    mode: ProcessFileMode,
-    flags: ProcessFileFlags,
-}
-
-pub struct ProcessState {
-    files: Vec<ProcessFileRec>,
-}
-
-impl ProcessState {
-    pub fn new() -> ProcessState {
-        Self {
-            files: Vec::new(),
-        }
-    }
-}
 
 pub fn get_child_buffer(pid: unistd::Pid, base: usize, len: usize) -> String {
     let mut rbuf: Vec<u8> = vec![0; len];
@@ -114,36 +81,51 @@ pub fn wait_child(pid: unistd::Pid) {
     wait::waitpid(pid, None).expect(&format!("Unable to wait for child PID {}", pid));
 }
 
-pub fn child_loop(child: unistd::Pid) {
+pub fn child_loop(child: unistd::Pid) -> ProcessState {
     let mut conf = syscalls::SyscallConfigMap::new();
     let mut state = ProcessState::new();
     loop {
         // Await next child syscall
-        ptrace::syscall(child).expect("Unable to ask for next child syscall");
+        if let Err(_) = ptrace::syscall(child) {
+            eprintln!("Unable to ask for next child syscall");
+            break;
+        };
         wait_child(child);
 
         // Get syscall details
-        let mut regs = ptrace::getregs(child).expect("Unable to get syscall registers before servicing");
-        let syscall_id = regs.orig_rax;
-
-        let handler_res = syscalls::handle_pre_syscall(&mut conf, &mut state, child, syscall_id, &mut regs);
-
-        // Execute this child syscall
-        ptrace::syscall(child).expect("Unable to execute current child syscall");
-        wait_child(child);
-
-        // Get syscall result
         match ptrace::getregs(child) {
-            Ok(ref mut regs) => {
-                syscalls::handle_post_syscall(handler_res, &mut state, child, syscall_id, regs);
+            Ok(mut regs) => {
+                let syscall_id = regs.orig_rax;
+
+                let handler_res = syscalls::handle_pre_syscall(&mut conf, &mut state, child, syscall_id, &mut regs);
+
+                // Execute this child syscall
+                ptrace::syscall(child).expect("Unable to execute current child syscall");
+                wait_child(child);
+
+                // Get syscall result
+                match ptrace::getregs(child) {
+                    Ok(ref mut regs) => {
+                        syscalls::handle_post_syscall(handler_res, &mut state, child, syscall_id, regs);
+                    },
+                    Err(err) => {
+                        if err.as_errno() == Some(nix::errno::Errno::ESRCH) {
+                            eprintln!("\nChild process terminated");
+                            break;
+                        }
+                        eprintln!("Unable to get syscall registers after servicing");
+                    },
+                };
             },
             Err(err) => {
+                eprintln!("Unable to get syscall registers before servicing");
                 if err.as_errno() == Some(nix::errno::Errno::ESRCH) {
                     eprintln!("\nChild process terminated");
                     break;
                 }
-                eprintln!("Unable to get syscall registers after servicing");
             },
         };
     }
+
+    state
 }

@@ -1,13 +1,11 @@
 mod child_process;
 mod cli;
+mod process_state;
 mod syscalls;
 
 use std::env;
 use nix::sys::ptrace;
 use nix::unistd;
-
-// NOTE: syscalls on Linux x86_64 use registers in the following order for arguments: rdi, rsi,
-// rdx, r10, r8, r9
 
 fn main() {
     let mut args = env::args();
@@ -33,7 +31,10 @@ fn main() {
             ptrace::setoptions(child, ptrace::Options::PTRACE_O_EXITKILL).expect("Unable to set PTRACE_O_EXITKILL option");
 
             // Execute syscall wait loop
-            child_process::child_loop(child);
+            let end_state = child_process::child_loop(child);
+
+            // Print the child process's final state report
+            eprintln!("{}", end_state.report());
         },
         unistd::ForkResult::Child => {
             child_process::exec_child(child_cmd, args);
