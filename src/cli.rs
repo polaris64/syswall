@@ -7,27 +7,61 @@ pub enum UserResponse {
     BlockAllSyscallSoft,
     BlockOnceHard,
     BlockOnceSoft,
+    Empty,
+    ShowCommands,
     Unknown(String),
+}
+
+impl From<&str> for UserResponse {
+    fn from(s: &str) -> Self {
+        match s {
+            "a"   => UserResponse::AllowOnce,
+            "aa"  => UserResponse::AllowAllSyscall,
+            "bh"  => UserResponse::BlockOnceHard,
+            "bs"  => UserResponse::BlockOnceSoft,
+            "bah" => UserResponse::BlockAllSyscallHard,
+            "bas" => UserResponse::BlockAllSyscallSoft,
+            ""    => UserResponse::Empty,
+            "?"   => UserResponse::ShowCommands,
+            _     => UserResponse::Unknown(String::from(s)),
+        }
+    }
+}
+
+impl From<&UserResponse> for String {
+    fn from(x: &UserResponse) -> Self {
+        match x {
+            UserResponse::AllowOnce           => String::from("a"),
+            UserResponse::AllowAllSyscall     => String::from("aa"),
+            UserResponse::BlockOnceHard       => String::from("bh"),
+            UserResponse::BlockOnceSoft       => String::from("bs"),
+            UserResponse::BlockAllSyscallHard => String::from("bah"),
+            UserResponse::BlockAllSyscallSoft => String::from("bas"),
+            UserResponse::Empty               => String::from(""),
+            UserResponse::ShowCommands        => String::from("?"),
+            UserResponse::Unknown(_)          => String::new(),
+        }
+    }
 }
 
 pub fn get_user_input(default: UserResponse) -> UserResponse {
     let mut buffer = String::new();
+    let def_str: String = String::from(&default);
     loop {
-        eprint!(" - Choice (\"{}\" default, ? for help): ", command_from_user_response(&default));
+        eprint!(" - Choice (\"{}\" default, ? for help): ", def_str);
         buffer.clear();
         io::stdin().read_line(&mut buffer).expect("Unable to read from stdin");
         let inp = buffer.trim();
-        match inp {
-            "?" => show_commands(),
-            "a" => return UserResponse::AllowOnce,
-            "aa" => return UserResponse::AllowAllSyscall,
-            "bh" => return UserResponse::BlockOnceHard,
-            "bs" => return UserResponse::BlockOnceSoft,
-            "bah" => return UserResponse::BlockAllSyscallHard,
-            "bas" => return UserResponse::BlockAllSyscallSoft,
-            "" => return default,
-            _ => return UserResponse::Unknown(String::from(inp)),
-        };
+        let resp = UserResponse::from(inp);
+        match resp {
+            UserResponse::ShowCommands => show_commands(),
+            UserResponse::Empty => return default,
+            UserResponse::Unknown(s) => {
+                eprintln!("Unknown command \"{}\"", s);
+                show_commands();
+            },
+            _ => return resp,
+        }
     }
 }
 
@@ -39,16 +73,4 @@ fn show_commands() {
     eprintln!("   bs: soft-block this syscall once (tracee sees success)");
     eprintln!("   bah: always hard-block this syscall from now on");
     eprintln!("   bas: always soft-block this syscall from now on");
-}
-
-fn command_from_user_response(v: &UserResponse) -> &'static str {
-    match v {
-        UserResponse::AllowOnce => "a",
-        UserResponse::AllowAllSyscall => "aa",
-        UserResponse::BlockOnceHard => "bh",
-        UserResponse::BlockOnceSoft => "bs",
-        UserResponse::BlockAllSyscallHard => "bah",
-        UserResponse::BlockAllSyscallSoft => "bas",
-        UserResponse::Unknown(_) => "",
-    }
 }
