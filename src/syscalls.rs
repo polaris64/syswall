@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use libc;
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
@@ -7,6 +6,7 @@ use nix::sys::ptrace;
 
 use crate::child_process;
 use crate::cli;
+use crate::process_conf::{ProcessConf, SyscallConfig};
 use crate::process_state::{ProcessState, ProcessFileState};
 
 pub enum HandleSyscallResult {
@@ -15,17 +15,10 @@ pub enum HandleSyscallResult {
     Unchanged,
 }
 
-pub enum SyscallConfig {
-    Allowed,
-    HardBlocked,
-    SoftBlocked,
-}
-
-pub type SyscallConfigMap = HashMap<usize, SyscallConfig>;
 pub type SyscallRegs = libc::user_regs_struct;
 
 pub fn handle_pre_syscall(
-    config:     &mut SyscallConfigMap,
+    config:     &mut ProcessConf,
     state:      &mut ProcessState,
     pid:        unistd::Pid,
     syscall_id: u64,
@@ -199,14 +192,14 @@ pub fn handle_post_syscall(
 }
 
 fn syscall_choice(
-    config:     &mut SyscallConfigMap,
+    config:     &mut ProcessConf,
     pid:        unistd::Pid,
     syscall_id: u64,
     regs:       &mut SyscallRegs,
 ) -> Result<HandleSyscallResult, &'static str> {
     let mut res = HandleSyscallResult::Unchanged;
 
-    match config.get(&(syscall_id as usize)) {
+    match config.syscalls.get(&(syscall_id as usize)) {
         Some(conf) => {
             match conf {
                 SyscallConfig::Allowed => {
@@ -228,14 +221,12 @@ fn syscall_choice(
         },
         None => {
             match cli::get_user_input(cli::UserResponse::AllowOnce)? {
-                cli::UserResponse::AllowAllSyscall => {
-                    *config.entry(syscall_id as usize).or_insert(SyscallConfig::Allowed) = SyscallConfig::Allowed;
-                },
+                cli::UserResponse::AllowAllSyscall => config.add_syscall_conf(syscall_id as usize, SyscallConfig::Allowed),
                 cli::UserResponse::BlockAllSyscallHard => {
                     if let Ok(()) = block_syscall(pid, regs) {
                         res = HandleSyscallResult::BlockedHard;
                     }
-                    *config.entry(syscall_id as usize).or_insert(SyscallConfig::HardBlocked) = SyscallConfig::HardBlocked;
+                    config.add_syscall_conf(syscall_id as usize, SyscallConfig::HardBlocked);
                 },
                 cli::UserResponse::BlockOnceHard => {
                     if let Ok(()) = block_syscall(pid, regs) {
@@ -246,7 +237,7 @@ fn syscall_choice(
                     if let Ok(()) = block_syscall(pid, regs) {
                         res = HandleSyscallResult::BlockedSoft;
                     }
-                    *config.entry(syscall_id as usize).or_insert(SyscallConfig::SoftBlocked) = SyscallConfig::SoftBlocked;
+                    config.add_syscall_conf(syscall_id as usize, SyscallConfig::SoftBlocked);
                 },
                 cli::UserResponse::BlockOnceSoft => {
                     if let Ok(()) = block_syscall(pid, regs) {

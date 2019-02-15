@@ -5,6 +5,7 @@ use nix::sys::ptrace;
 use nix::sys::uio;
 use nix::sys::wait;
 
+use crate::process_conf::ProcessConf;
 use crate::process_state::{ProcessState};
 use crate::syscalls;
 
@@ -82,8 +83,7 @@ pub fn wait_child(pid: unistd::Pid) -> Result<nix::sys::wait::WaitStatus, String
     wait::waitpid(pid, None).map_err(|_| format!("Unable to wait for child PID {}", pid))
 }
 
-pub fn child_loop(child: unistd::Pid) -> Result<ProcessState, String> {
-    let mut conf  = syscalls::SyscallConfigMap::new();
+pub fn child_loop(child: unistd::Pid, conf: &mut ProcessConf) -> Result<ProcessState, String> {
     let mut state = ProcessState::new();
 
     loop {
@@ -99,7 +99,7 @@ pub fn child_loop(child: unistd::Pid) -> Result<ProcessState, String> {
             Ok(mut regs) => {
                 let syscall_id = regs.orig_rax;
 
-                let handler_res = syscalls::handle_pre_syscall(&mut conf, &mut state, child, syscall_id, &mut regs);
+                let handler_res = syscalls::handle_pre_syscall(conf, &mut state, child, syscall_id, &mut regs);
 
                 // Execute this child syscall
                 ptrace::syscall(child).map_err(|_| "Unable to execute current child syscall")?;
