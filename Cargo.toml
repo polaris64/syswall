@@ -5,6 +5,7 @@ authors = ["Simon Pugnet <simon@polaris64.net>"]
 edition = "2018"
 
 [dependencies]
+clap = "2.32.0"
 libc = "0.2.48"
 nix = "0.13.0"
 serde = { version = "1.0.87", features = ["derive"] }

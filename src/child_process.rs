@@ -1,4 +1,3 @@
-use std::env;
 use std::ffi::CString;
 use nix::unistd;
 use nix::sys::ptrace;
@@ -63,19 +62,24 @@ pub fn get_child_buffer_cstr(pid: unistd::Pid, base: usize) -> Result<String, &'
     }
 }
 
-pub fn exec_child(child_cmd: String, args: env::Args) -> Result<(), String> {
+pub fn exec_child(cmd: Vec<&str>) -> Result<(), String> {
     ptrace::traceme().map_err(|_| "CHILD: could not enable tracing by parent (PTRACE_TRACEME failed)")?;
 
-    // Build new args for child process
-    let mut child_args = args.map(|v| CString::new(v).unwrap_or(CString::default())).collect::<Vec<CString>>();
-    child_args.insert(0, CString::new(child_cmd.as_str()).unwrap_or(CString::default()));
-
-    eprintln!("CHILD: executing {} with argv {:?}...", child_cmd, child_args);
-    unistd::execvp(
-        &CString::new(child_cmd.as_str()).map_err(|_| "Unable to create CString from child command String for execvp()")?,
-        child_args.as_slice(),
+    // Extract child command (first arg)
+    let child_cmd = CString::new(
+        *cmd.first().ok_or("Unable to extract tracee command")?
     )
-        .map_err(|_| format!("unable to execute {}", &child_cmd))?;
+        .map_err(|_| "Unable to extract tracee command")?;
+
+    // Extract child arguments (including first command)
+    let child_args = cmd
+        .iter()
+        .map(|v| CString::new(*v).unwrap_or(CString::default()))
+        .collect::<Vec<CString>>();
+
+    eprintln!("CHILD: executing {:?} with argv {:?}...", child_cmd, child_args);
+    unistd::execvp(&child_cmd, &child_args)
+        .map_err(|_| format!("unable to execute {:?}", child_cmd))?;
     Ok(())
 }
 
