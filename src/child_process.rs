@@ -10,7 +10,7 @@ use crate::syscalls;
 
 pub fn get_child_buffer(pid: unistd::Pid, base: usize, len: usize) -> Result<String, &'static str> {
     let mut rbuf: Vec<u8> = vec![0; len];
-    let remote_iovec = uio::RemoteIoVec{ base: base, len: len };
+    let remote_iovec = uio::RemoteIoVec{ base, len };
     uio::process_vm_readv(
         pid,
         &[uio::IoVec::from_mut_slice(rbuf.as_mut_slice())],
@@ -74,7 +74,7 @@ pub fn exec_child(cmd: Vec<&str>) -> Result<(), String> {
     // Extract child arguments (including first command)
     let child_args = cmd
         .iter()
-        .map(|v| CString::new(*v).unwrap_or(CString::default()))
+        .map(|v| CString::new(*v).unwrap_or_default())
         .collect::<Vec<CString>>();
 
     eprintln!("CHILD: executing {:?} with argv {:?}...", child_cmd, child_args);
@@ -92,7 +92,7 @@ pub fn child_loop(child: unistd::Pid, conf: &mut ProcessConf) -> Result<ProcessS
 
     loop {
         // Await next child syscall
-        if let Err(_) = ptrace::syscall(child) {
+        if ptrace::syscall(child).is_err() {
             eprintln!("Unable to ask for next child syscall");
             break;
         };

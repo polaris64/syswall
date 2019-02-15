@@ -51,7 +51,7 @@ impl ProcessState {
     }
 
     pub fn add_pending_file(&mut self, path: &str, flags: isize, mode: isize) {
-        if let None = self.file_by_path(path) {
+        if self.file_by_path(path).is_none() {
             self.files.push(ProcessFileRec::new(path, flags, mode));
         }
     }
@@ -100,10 +100,10 @@ impl ProcessState {
         let blocked_files = self.report_blocked_files("\n", "  - ");
         let opened_files  = self.report_opened_files("\n", "  - ");
         let mut res = String::new();
-        if blocked_files.len() > 0 {
+        if !blocked_files.is_empty() {
             res += &format!("\nThe process was blocked from opening the following files: -\n{}", blocked_files);
         }
-        if opened_files.len() > 0 {
+        if !opened_files.is_empty() {
             res += &format!("\nThe process opened the following files: -\n{}", opened_files);
         }
         res
