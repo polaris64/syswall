@@ -13,19 +13,19 @@ pub enum ProcessFileState {
 
 #[derive(Debug)]
 pub struct ProcessFileRec {
-    pub state:    ProcessFileState,
+    pub state: ProcessFileState,
     pub filename: String,
-    pub mode:     Option<OFlag>,
-    pub flags:    Option<OFlag>,
+    pub mode: Option<OFlag>,
+    pub flags: Option<OFlag>,
 }
 
 impl ProcessFileRec {
-    pub fn new(path: &str, flag_bits: isize , mode_bits: isize) -> Self {
+    pub fn new(path: &str, flag_bits: isize, mode_bits: isize) -> Self {
         Self {
-            state:    ProcessFileState::PendingSyscall,
+            state: ProcessFileState::PendingSyscall,
             filename: String::from(path),
-            mode:     OFlag::from_bits(mode_bits as libc::c_int),
-            flags:    OFlag::from_bits(flag_bits as libc::c_int),
+            mode: OFlag::from_bits(mode_bits as libc::c_int),
+            flags: OFlag::from_bits(flag_bits as libc::c_int),
         }
     }
 }
@@ -37,13 +37,13 @@ pub struct ProcessState {
 
 impl ProcessState {
     pub fn new() -> Self {
-        Self {
-            files: Vec::new(),
-        }
+        Self { files: Vec::new() }
     }
 
     pub fn file_by_fd(&mut self, fd: usize) -> Option<&mut ProcessFileRec> {
-        self.files.iter_mut().find(|x| x.state == ProcessFileState::Opened(fd))
+        self.files
+            .iter_mut()
+            .find(|x| x.state == ProcessFileState::Opened(fd))
     }
 
     pub fn file_by_path(&mut self, path: &str) -> Option<&mut ProcessFileRec> {
@@ -57,7 +57,9 @@ impl ProcessState {
     }
 
     pub fn first_pending_file(&mut self) -> Option<&mut ProcessFileRec> {
-        self.files.iter_mut().find(|x| x.state == ProcessFileState::PendingSyscall)
+        self.files
+            .iter_mut()
+            .find(|x| x.state == ProcessFileState::PendingSyscall)
     }
 
     pub fn update_pending_file_state(&mut self, file_state: ProcessFileState) {
@@ -73,7 +75,8 @@ impl ProcessState {
     }
 
     pub fn report_blocked_files(&self, join: &str, prefix: &str) -> String {
-        self.files.iter()
+        self.files
+            .iter()
             .filter(|x| match x.state {
                 ProcessFileState::OpenBlockedHard | ProcessFileState::OpenBlockedSoft => true,
                 _ => false,
@@ -85,7 +88,8 @@ impl ProcessState {
     }
 
     pub fn report_opened_files(&self, join: &str, prefix: &str) -> String {
-        self.files.iter()
+        self.files
+            .iter()
             .filter(|x| match x.state {
                 ProcessFileState::Opened(_) | ProcessFileState::Closed => true,
                 _ => false,
@@ -98,13 +102,19 @@ impl ProcessState {
 
     pub fn report(&self) -> String {
         let blocked_files = self.report_blocked_files("\n", "  - ");
-        let opened_files  = self.report_opened_files("\n", "  - ");
+        let opened_files = self.report_opened_files("\n", "  - ");
         let mut res = String::new();
         if !blocked_files.is_empty() {
-            res += &format!("\nThe process was blocked from opening the following files: -\n{}", blocked_files);
+            res += &format!(
+                "\nThe process was blocked from opening the following files: -\n{}",
+                blocked_files
+            );
         }
         if !opened_files.is_empty() {
-            res += &format!("\nThe process opened the following files: -\n{}", opened_files);
+            res += &format!(
+                "\nThe process opened the following files: -\n{}",
+                opened_files
+            );
         }
         res
     }
