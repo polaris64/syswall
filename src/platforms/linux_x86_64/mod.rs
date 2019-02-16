@@ -1,4 +1,4 @@
-use log::{error, info};
+use log::{error, info, trace};
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
 use nix::unistd::Pid;
@@ -107,7 +107,19 @@ impl crate::platforms::PlatformHandler for Handler {
                 };
                 true
             }
-            _ => false,
+            _ => {
+                trace!(
+                    "Unhandled syscall {} ({:X}, {:X}, {:X}, {:X}, {:X}, {:X})",
+                    syscall_id,
+                    regs.rdi,
+                    regs.rsi,
+                    regs.rdx,
+                    regs.r10,
+                    regs.r8,
+                    regs.r9
+                );
+                false
+            },
         }
     }
 
@@ -221,7 +233,9 @@ impl crate::platforms::PlatformHandler for Handler {
                             ));
                         }
                     }
-                    _ => (),
+                    _ => {
+                        trace!("Unhandled syscall result: {:X}", regs.rax);
+                    },
                 };
             }
         }

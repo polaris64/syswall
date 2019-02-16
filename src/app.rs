@@ -66,8 +66,9 @@ impl<'a> App<'a> {
                 Arg::with_name("verbose")
                     .short("v")
                     .long("verbose")
-                    .help("Increases verbosity of program output")
-                    .takes_value(false),
+                    .help("Increases verbosity of program output (can be specified multiple times)")
+                    .takes_value(false)
+                    .multiple(true)
             )
             .arg(
                 Arg::with_name("load_config")
@@ -75,7 +76,7 @@ impl<'a> App<'a> {
                     .long("load-config")
                     .help("Whether to load a previously saved config (see --config-file)")
                     .takes_value(false)
-                    .requires("config_file"),
+                    .requires("config_file")
             )
             .arg(
                 Arg::with_name("save_config")
@@ -85,7 +86,7 @@ impl<'a> App<'a> {
                         "Whether to save the resulting tracee config to a file (see --config-file)",
                     )
                     .takes_value(false)
-                    .requires("config_file"),
+                    .requires("config_file")
             )
             .arg(
                 Arg::with_name("config_file")
@@ -93,21 +94,21 @@ impl<'a> App<'a> {
                     .long("config-file")
                     .value_name("FILENAME")
                     .help("Name of process config JSON to load/save")
-                    .takes_value(true),
+                    .takes_value(true)
             )
             .arg(
                 Arg::with_name("tracee_cmd")
                     .raw(true)
                     .help("Full tracee command and arguments (e.g. \"ls -l\")")
-                    .required(true),
+                    .required(true)
             )
             .get_matches();
 
         // Set up logger
-        let level_filter = if matches.is_present("verbose") {
-            LevelFilter::Debug
-        } else {
-            LevelFilter::Info
+        let level_filter = match matches.occurrences_of("verbose") {
+            0 => LevelFilter::Info,
+            1 => LevelFilter::Debug,
+            _ => LevelFilter::Trace,
         };
         if log::set_logger(&LOGGER)
             .map(|()| log::set_max_level(level_filter))
