@@ -6,6 +6,7 @@ use nix::unistd;
 use std::ffi::CString;
 
 use crate::app::App;
+use crate::platforms::PlatformHandler;
 use crate::process_conf::ProcessConf;
 use crate::process_state::ProcessState;
 use crate::syscalls;
@@ -96,6 +97,7 @@ pub fn wait_child(pid: unistd::Pid) -> Result<nix::sys::wait::WaitStatus, String
 pub fn child_loop(
     app: &App,
     child: unistd::Pid,
+    platform_handler: impl PlatformHandler,
     conf: &mut ProcessConf,
 ) -> Result<ProcessState, String> {
     let mut state = ProcessState::new();
@@ -114,7 +116,13 @@ pub fn child_loop(
                 let syscall_id = regs.orig_rax;
 
                 let handler_res = syscalls::handle_pre_syscall(
-                    app, conf, &mut state, child, syscall_id, &mut regs,
+                    app,
+                    conf,
+                    &mut state,
+                    &platform_handler,
+                    child,
+                    syscall_id,
+                    &mut regs,
                 );
 
                 // Execute this child syscall
@@ -127,6 +135,7 @@ pub fn child_loop(
                         syscalls::handle_post_syscall(
                             handler_res,
                             &mut state,
+                            &platform_handler,
                             child,
                             syscall_id,
                             regs,

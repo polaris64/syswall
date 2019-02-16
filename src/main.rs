@@ -1,6 +1,7 @@
 mod app;
 mod child_process;
 mod logger;
+mod platforms;
 mod process_conf;
 mod process_state;
 mod syscalls;
@@ -10,6 +11,7 @@ use nix::sys::ptrace;
 use nix::unistd;
 
 use crate::app::App;
+use crate::platforms::linux_x86_64::Handler;
 use crate::process_conf::ProcessConf;
 
 fn main() -> Result<(), String> {
@@ -21,6 +23,9 @@ fn main() -> Result<(), String> {
         .values_of("tracee_cmd")
         .ok_or("Unable to get tracee command")?
         .collect::<Vec<&str>>();
+
+    // Create a syscall PlatformHandler
+    let platform_handler = Handler::new();
 
     // Fork this process
     let fork_res = unistd::fork().map_err(|_| "Unable to fork")?;
@@ -57,7 +62,7 @@ fn main() -> Result<(), String> {
             };
 
             // Execute main child process control loop
-            match child_process::child_loop(&app, child, &mut conf) {
+            match child_process::child_loop(&app, child, platform_handler, &mut conf) {
                 Ok(st) => {
                     // Print the child process's final state report
                     info!("\nFinal child process state: -\n{}", st.report().as_str());
