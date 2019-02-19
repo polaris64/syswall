@@ -6,6 +6,8 @@ syswall functions similarly to the *nix `strace` tool, however for each syscall 
 
 syswall also collects statistics about the handled syscalls and is able to produce a report after the child process finishes execution.
 
+For more information about what syswall does, what is planned, and why, please see [this blog post on my website](https://www.polaris64.net/blog/programming/2019/syswall-a-firewall-for-syscalls)
+
 ## Current progress
 syswall is a very early prototype and as such only a small amount of the planned functionality is currently implemented.
 
@@ -14,7 +16,7 @@ The handling of syscalls is of course very much platform-dependent.  syswall sep
 From the Linux x86_64 platform, only a relatively small number of syscalls are actively handled at present.  These consist of open, close, read and write, meaning that currently syswall can manage the child preccess's file handle state only.
 
 ### `strace`
-syswall can be run with the -vv switch causing it to display all syscalls and results.
+syswall can be run with the -vv switch causing it to display all syscalls and results.  This provides similar functionality to the `strace` tool, without the interpretation of syscall arguments as yet.
 
 ### Interactive execution
 For supported syscalls, syswall allows the user to perform the following actions: -
