@@ -11,7 +11,16 @@ use crate::process_conf::ProcessConf;
 use crate::process_state::ProcessState;
 use crate::syscalls;
 
-pub fn get_child_buffer(pid: unistd::Pid, base: usize, len: usize) -> Result<String, &'static str> {
+#[derive(Debug)]
+pub struct ChildProcessBuffer(pub Vec<u8>);
+
+impl From<ChildProcessBuffer> for String {
+    fn from(b: ChildProcessBuffer) -> String {
+        String::from_utf8_lossy(&b.0).into_owned()
+    }
+}
+
+pub fn get_child_buffer(pid: unistd::Pid, base: usize, len: usize) -> Result<ChildProcessBuffer, &'static str> {
     let mut rbuf: Vec<u8> = vec![0; len];
     let remote_iovec = uio::RemoteIoVec { base, len };
     uio::process_vm_readv(
@@ -20,7 +29,7 @@ pub fn get_child_buffer(pid: unistd::Pid, base: usize, len: usize) -> Result<Str
         &[remote_iovec],
     )
     .map_err(|_| "Unable to read from child process virtual memory")?;
-    Ok(String::from_utf8_lossy(&rbuf).into_owned())
+    Ok(ChildProcessBuffer(rbuf))
 }
 
 pub fn get_child_buffer_cstr(pid: unistd::Pid, base: usize) -> Result<String, &'static str> {

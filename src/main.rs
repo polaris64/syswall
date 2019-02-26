@@ -36,8 +36,19 @@ fn main() -> Result<(), String> {
 
             // Wait for child and set trace options
             child_process::wait_child(child)?;
-            ptrace::setoptions(child, ptrace::Options::PTRACE_O_EXITKILL)
-                .map_err(|_| "Unable to set PTRACE_O_EXITKILL option for child process")?;
+            ptrace::setoptions(
+                child,
+                ptrace::Options::PTRACE_O_EXITKILL
+
+                // TODO: implement tracing of grandchild processes
+                // ptrace::Options::PTRACE_O_TRACECLONE |
+                // ptrace::Options::PTRACE_O_TRACEEXEC  |
+                // ptrace::Options::PTRACE_O_TRACEEXIT  |
+                // ptrace::Options::PTRACE_O_TRACEFORK  |
+                // ptrace::Options::PTRACE_O_TRACEVFORK |
+                // ptrace::Options::PTRACE_O_TRACEVFORKDONE
+            )
+                .map_err(|_| "Unable to set PTRACE_O_* options for child process")?;
 
             // Load ProcessConf from file if necessary
             let mut conf: ProcessConf = if app.args.is_present("load_config") {
