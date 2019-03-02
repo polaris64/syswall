@@ -6,7 +6,9 @@ use nix::fcntl::OFlag;
 use nix::unistd::Pid;
 
 use crate::child_process;
-use crate::process_state::{ProcessFileState, ProcessSocketState, ProcessState, SocketConnectionState};
+use crate::process_state::ProcessState;
+use crate::process_state::files::ProcessFileState;
+use crate::process_state::sockets::{ProcessSocketState, SocketConnectionState};
 use crate::syscalls::{update_registers, HandleSyscallResult, SyscallRegs};
 
 pub struct Handler;

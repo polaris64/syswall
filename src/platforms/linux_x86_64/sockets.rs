@@ -4,14 +4,16 @@ use nix::unistd::Pid;
 use std::ptr;
 
 use crate::child_process::{self, ChildProcessBuffer};
-use crate::process_state::{ProcessState, SocketProtocol, SocketType};
+use crate::process_state::ProcessState;
+use crate::process_state::sockets::{SocketProtocol, SocketType};
 use crate::syscalls::SyscallRegs;
 
 impl Into<Option<socket::SockAddr>> for ChildProcessBuffer {
     fn into(self) -> Option<socket::SockAddr> {
 
         // First interpret buffer as sockaddr in order to get sa_family and generic sa_data
-        let sockaddr: libc::sockaddr = unsafe { ptr::read(self.0.as_ptr() as *const libc::sockaddr) };
+        #[allow(clippy::cast_ptr_alignment)]
+        let sockaddr: libc::sockaddr = unsafe { ptr::read_unaligned(self.0.as_ptr() as *const libc::sockaddr) };
 
         match libc::c_int::from(sockaddr.sa_family) {
             libc::AF_INET => Some(
@@ -34,7 +36,9 @@ impl Into<Option<socket::SockAddr>> for ChildProcessBuffer {
             ),
             libc::AF_UNIX => {
                 // Interpret buffer as sockaddr_un
-                let sockaddr: libc::sockaddr_un = unsafe { ptr::read(self.0.as_ptr() as *const libc::sockaddr_un) };
+                #[allow(clippy::cast_ptr_alignment)]
+                let sockaddr: libc::sockaddr_un = unsafe { ptr::read_unaligned(self.0.as_ptr() as *const libc::sockaddr_un) };
+
                 match socket::SockAddr::new_unix(
 
                     // Collect sun_path as Vec<u8> while element is non-zero. sun_path can be a
