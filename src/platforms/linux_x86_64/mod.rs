@@ -223,7 +223,7 @@ impl crate::platforms::PlatformHandler for Handler {
 
                     // connect
                     42 => {
-                        // TODO: handle connect error
+                        // TODO: simulate connect return
                         if let Some(ref mut sock) = state.socket_by_fd(regs.rdi as usize) {
                             sock.connection_state = SocketConnectionState::ConnectBlockedSoft;
                         }
@@ -290,7 +290,13 @@ impl crate::platforms::PlatformHandler for Handler {
                     // connect
                     42 => {
                         if let Some(ref mut sock) = state.socket_by_fd(regs.rdi as usize) {
-                            sock.connection_state = SocketConnectionState::Connected;
+                            if (regs.rax as isize) < 0 {
+                                sock.connection_state = SocketConnectionState::ConnectError(
+                                    Errno::from_i32(-(regs.rax as i32)),
+                                );
+                            } else {
+                                sock.connection_state = SocketConnectionState::Connected;
+                            }
                         }
                     }
 

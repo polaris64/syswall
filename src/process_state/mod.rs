@@ -76,8 +76,8 @@ impl ProcessState {
     }
 
     pub fn update_socket_state_by_fd(&mut self, fd: usize, state: ProcessSocketState) {
-        if let Some(f) = self.socket_by_fd(fd) {
-            f.state = state;
+        if let Some(s) = self.socket_by_fd(fd) {
+            s.state = state;
         }
     }
 

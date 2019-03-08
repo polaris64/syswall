@@ -36,6 +36,7 @@ pub enum SocketConnectionState {
     Connected,
     ConnectBlockedHard,
     ConnectBlockedSoft,
+    ConnectError(Errno),
     Disconnected,
 }
 
@@ -113,8 +114,9 @@ impl fmt::Display for ProcessSocketRec {
             ProcessSocketState::Created(_) | ProcessSocketState::Closed => {
                 write!(
                     f,
-                    "Socket: {} ({}, {:?}, {}, {}), address: {}",
+                    "Socket: {} ({:?}, {}, {:?}, {}, {}), address: {}",
                     self.state,
+                    self.connection_state,
                     match &self.sock_af {
                         Some(v) => format!("{:?}", &v),
                         None => String::from("No address family"),
