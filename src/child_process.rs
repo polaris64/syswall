@@ -1,9 +1,13 @@
 use log::{debug, warn};
 use nix::sys::ptrace;
+use nix::sys::signal;
 use nix::sys::uio;
 use nix::sys::wait;
 use nix::unistd;
+use signal_hook;
 use std::ffi::CString;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::app::App;
 use crate::platforms::PlatformHandler;
@@ -20,7 +24,11 @@ impl From<ChildProcessBuffer> for String {
     }
 }
 
-pub fn get_child_buffer(pid: unistd::Pid, base: usize, len: usize) -> Result<ChildProcessBuffer, &'static str> {
+pub fn get_child_buffer(
+    pid: unistd::Pid,
+    base: usize,
+    len: usize,
+) -> Result<ChildProcessBuffer, &'static str> {
     let mut rbuf: Vec<u8> = vec![0; len];
     let remote_iovec = uio::RemoteIoVec { base, len };
     uio::process_vm_readv(
@@ -111,7 +119,24 @@ pub fn child_loop(
 ) -> Result<ProcessState, String> {
     let mut state = ProcessState::new();
 
+    // Flag to indicate if a SIGINT has been received
+    let sigint = Arc::new(AtomicBool::new(false));
+
+    // Register the "sigint" flag to be set when a SIGINT signal is received
+    signal_hook::flag::register(signal_hook::SIGINT, Arc::clone(&sigint))
+        .map_err(|_| "Unable to register SIGINT handler")?;
+
     loop {
+
+        // Check "sigint" flag: if set, kill the tracee process and break from the loop
+        if sigint.load(Ordering::Relaxed) {
+            warn!("SIGINT received, killing tracee process...");
+            if let Err(e) = signal::kill(child, signal::Signal::SIGTERM) {
+                warn!("Unable to send SIGTERM to tracee process: {}", e);
+            }
+            break;
+        }
+
         // Await next child syscall
         if ptrace::syscall(child).is_err() {
             warn!("Unable to ask for next child syscall");
