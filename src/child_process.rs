@@ -122,12 +122,26 @@ pub fn child_loop(
     // Flag to indicate if a SIGINT has been received
     let sigint = Arc::new(AtomicBool::new(false));
 
-    // Register the "sigint" flag to be set when a SIGINT signal is received
-    signal_hook::flag::register(signal_hook::SIGINT, Arc::clone(&sigint))
-        .map_err(|_| "Unable to register SIGINT handler")?;
+    // UNSAFE: register a handler for SIGINT to close stdin and set the "sigint" flag
+    unsafe {
+        // Clone the "sigint" Arc to move to closure
+        let sigint = Arc::clone(&sigint);
+
+        signal_hook::register(signal_hook::SIGINT, move || {
+            // Close stdin explicitly. This will abort any user input (io::stdin().read_line())
+            // that is currently in progress.
+            //
+            // TODO: improve when support is available (see:
+            // https://github.com/rust-lang/rust/issues/40032)
+            libc::close(0);
+
+            // Set the "sigint" flag
+            sigint.store(true, Ordering::SeqCst);
+        })
+    }
+    .map_err(|_| "Unable to register SIGINT handler")?;
 
     loop {
-
         // Check "sigint" flag: if set, kill the tracee process and break from the loop
         if sigint.load(Ordering::Relaxed) {
             warn!("SIGINT received, killing tracee process...");
