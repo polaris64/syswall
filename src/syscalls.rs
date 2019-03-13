@@ -9,6 +9,7 @@ use crate::process_state::ProcessState;
 
 use crate::platforms::PlatformHandler;
 
+#[derive(Debug)]
 pub enum HandleSyscallResult {
     BlockedHard,
     BlockedSoft,
@@ -23,13 +24,12 @@ pub fn handle_pre_syscall(
     state: &mut ProcessState,
     platform_handler: &impl PlatformHandler,
     pid: unistd::Pid,
-    syscall_id: u64,
     regs: &mut SyscallRegs,
 ) -> HandleSyscallResult {
-    let handled = platform_handler.pre(state, regs, pid, syscall_id as usize);
+    let handled = platform_handler.pre(state, regs, pid);
 
     if handled {
-        syscall_choice(app, config, platform_handler, pid, syscall_id, regs)
+        syscall_choice(app, config, platform_handler, pid, state.syscall_id, regs)
             .unwrap_or(HandleSyscallResult::Unchanged)
     } else {
         HandleSyscallResult::Unchanged
@@ -37,14 +37,12 @@ pub fn handle_pre_syscall(
 }
 
 pub fn handle_post_syscall(
-    pre_result: HandleSyscallResult,
     state: &mut ProcessState,
     platform_handler: &impl PlatformHandler,
     pid: unistd::Pid,
-    syscall_id: u64,
     regs: &mut SyscallRegs,
 ) {
-    platform_handler.post(pre_result, state, regs, pid, syscall_id as usize);
+    platform_handler.post(state, regs, pid);
 }
 
 fn syscall_choice(
@@ -52,12 +50,12 @@ fn syscall_choice(
     config: &mut ProcessConf,
     platform_handler: &impl PlatformHandler,
     pid: unistd::Pid,
-    syscall_id: u64,
+    syscall_id: Option<u64>,
     regs: &mut SyscallRegs,
 ) -> Result<HandleSyscallResult, &'static str> {
     let mut res = HandleSyscallResult::Unchanged;
 
-    match config.syscalls.get(&(syscall_id as usize)) {
+    match config.syscalls.get(&(syscall_id.unwrap() as usize)) {
         Some(conf) => match conf {
             SyscallConfig::Allowed => {
                 debug!(" - Allowed by configuration");
@@ -77,13 +75,13 @@ fn syscall_choice(
         },
         None => match app.get_user_input(UserResponse::AllowOnce)? {
             UserResponse::AllowAllSyscall => {
-                config.add_syscall_conf(syscall_id as usize, SyscallConfig::Allowed)
+                config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::Allowed)
             }
             UserResponse::BlockAllSyscallHard => {
                 if let Ok(()) = platform_handler.block_syscall(pid, regs) {
                     res = HandleSyscallResult::BlockedHard;
                 }
-                config.add_syscall_conf(syscall_id as usize, SyscallConfig::HardBlocked);
+                config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::HardBlocked);
             }
             UserResponse::BlockOnceHard => {
                 if let Ok(()) = platform_handler.block_syscall(pid, regs) {
@@ -94,7 +92,7 @@ fn syscall_choice(
                 if let Ok(()) = platform_handler.block_syscall(pid, regs) {
                     res = HandleSyscallResult::BlockedSoft;
                 }
-                config.add_syscall_conf(syscall_id as usize, SyscallConfig::SoftBlocked);
+                config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::SoftBlocked);
             }
             UserResponse::BlockOnceSoft => {
                 if let Ok(()) = platform_handler.block_syscall(pid, regs) {

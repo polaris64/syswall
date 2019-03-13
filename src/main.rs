@@ -39,16 +39,24 @@ fn main() -> Result<(), String> {
             ptrace::setoptions(
                 child,
                 ptrace::Options::PTRACE_O_EXITKILL
+                    | ptrace::Options::PTRACE_O_TRACECLONE
+                    | ptrace::Options::PTRACE_O_TRACEEXEC
+                    | ptrace::Options::PTRACE_O_TRACEFORK
+                    | ptrace::Options::PTRACE_O_TRACEVFORK
+                    | ptrace::Options::PTRACE_O_TRACEVFORKDONE, // PTRACE_O_TRACEEXIT will stop the tracee before exit in order to examine
+                                                                // registers. This is not required; without this option the tracer will be notified
+                                                                // after tracee exit.
+                                                                // ptrace::Options::PTRACE_O_TRACEEXIT
 
-                // TODO: implement tracing of grandchild processes
-                // ptrace::Options::PTRACE_O_TRACECLONE |
-                // ptrace::Options::PTRACE_O_TRACEEXEC  |
-                // ptrace::Options::PTRACE_O_TRACEEXIT  |
-                // ptrace::Options::PTRACE_O_TRACEFORK  |
-                // ptrace::Options::PTRACE_O_TRACEVFORK |
-                // ptrace::Options::PTRACE_O_TRACEVFORKDONE
+                                                                // TODO: PTRACE_O_TRACESYSGOOD: recommended by strace README-linux-ptrace, however
+                                                                // seems to freeze
+                                                                // ptrace::Options::PTRACE_O_TRACESYSGOOD |
             )
-                .map_err(|_| "Unable to set PTRACE_O_* options for child process")?;
+            .map_err(|_| "Unable to set PTRACE_O_* options for child process")?;
+
+            // Await next child syscall for main tracee
+            ptrace::syscall(child)
+                .map_err(|_| "Unable to set child process to run until first syscall")?;
 
             // Load ProcessConf from file if necessary
             let mut conf: ProcessConf = if app.args.is_present("load_config") {
@@ -74,9 +82,24 @@ fn main() -> Result<(), String> {
 
             // Execute main child process control loop
             match child_process::child_loop(&app, child, platform_handler, &mut conf) {
-                Ok(st) => {
-                    // Print the child process's final state report
-                    info!("\nFinal child process state: -\n{}", st.report().as_str());
+                Ok(processes) => {
+                    // Print report for all child processes
+                    info!(
+                        "{}",
+                        processes
+                            .0
+                            .iter()
+                            .map(|(pid, st)| {
+                                let report = st.report();
+                                if report.is_empty() {
+                                    format!("Nothing to report for {:?}", pid)
+                                } else {
+                                    format!("Final state for {:?}: -{}", pid, report)
+                                }
+                            })
+                            .collect::<Vec<String>>()
+                            .join("\n\n")
+                    );
 
                     // Save the process config based on args
                     if app.args.is_present("save_config") {

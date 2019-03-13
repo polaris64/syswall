@@ -3,18 +3,45 @@ pub mod sockets;
 
 use files::{ProcessFileRec, ProcessFileState};
 use sockets::{ProcessSocketRec, ProcessSocketState};
+use crate::syscalls::HandleSyscallResult;
+
+#[derive(Debug, PartialEq)]
+pub enum ProcessTraceState {
+    Created,
+    Stopped,
+    TraceSyscallEnterStop,
+    TraceSyscallExitStop,
+    RunningAwaitSyscall,
+    Terminated(isize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ProcessType {
+    ClonedThread,
+    ForkedProcess,
+    MainTracee,
+    VForkedProcess,
+}
 
 #[derive(Debug)]
 pub struct ProcessState {
     files: Vec<ProcessFileRec>,
     sockets: Vec<ProcessSocketRec>,
+    pub process_type: ProcessType,
+    pub handler_res: Option<HandleSyscallResult>,
+    pub syscall_id: Option<u64>,
+    pub trace_state: ProcessTraceState,
 }
 
 impl ProcessState {
-    pub fn new() -> Self {
+    pub fn new(trace_state: ProcessTraceState, process_type: ProcessType) -> Self {
         Self {
             files: Vec::new(),
             sockets: Vec::new(),
+            handler_res: None,
+            syscall_id: None,
+            process_type,
+            trace_state,
         }
     }
 

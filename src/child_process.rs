@@ -1,10 +1,11 @@
-use log::{debug, warn};
+use log::{debug, info, trace, warn};
 use nix::sys::ptrace;
 use nix::sys::signal;
 use nix::sys::uio;
 use nix::sys::wait;
-use nix::unistd;
+use nix::unistd::{execvp, Pid};
 use signal_hook;
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -12,8 +13,33 @@ use std::sync::Arc;
 use crate::app::App;
 use crate::platforms::PlatformHandler;
 use crate::process_conf::ProcessConf;
-use crate::process_state::ProcessState;
+use crate::process_state::{ProcessState, ProcessTraceState, ProcessType};
 use crate::syscalls;
+
+pub struct ProcessList(pub HashMap<Pid, ProcessState>);
+
+impl ProcessList {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub fn all_threads(&self, tracee_pid: Pid) -> bool {
+        self.0.iter().all(|(pid, child_state)| {
+            *pid == tracee_pid
+                || match child_state.process_type {
+                    ProcessType::ClonedThread => true,
+                    _ => false,
+                }
+        })
+    }
+
+    pub fn all_terminated(&self) -> bool {
+        self.0.values().map(|x| &x.trace_state).all(|x| match x {
+            ProcessTraceState::Terminated(_) => true,
+            _ => false,
+        })
+    }
+}
 
 #[derive(Debug)]
 pub struct ChildProcessBuffer(pub Vec<u8>);
@@ -25,7 +51,7 @@ impl From<ChildProcessBuffer> for String {
 }
 
 pub fn get_child_buffer(
-    pid: unistd::Pid,
+    pid: Pid,
     base: usize,
     len: usize,
 ) -> Result<ChildProcessBuffer, &'static str> {
@@ -40,7 +66,7 @@ pub fn get_child_buffer(
     Ok(ChildProcessBuffer(rbuf))
 }
 
-pub fn get_child_buffer_cstr(pid: unistd::Pid, base: usize) -> Result<String, &'static str> {
+pub fn get_child_buffer_cstr(pid: Pid, base: usize) -> Result<String, &'static str> {
     let mut final_buf: Vec<u8> = Vec::with_capacity(255);
 
     // Current RemoteIoVec base address
@@ -102,22 +128,246 @@ pub fn exec_child(cmd: Vec<&str>) -> Result<(), String> {
         "CHILD: executing {:?} with argv {:?}...",
         child_cmd, child_args
     );
-    unistd::execvp(&child_cmd, &child_args)
-        .map_err(|_| format!("unable to execute {:?}", child_cmd))?;
+    execvp(&child_cmd, &child_args).map_err(|_| format!("unable to execute {:?}", child_cmd))?;
     Ok(())
 }
 
-pub fn wait_child(pid: unistd::Pid) -> Result<nix::sys::wait::WaitStatus, String> {
-    wait::waitpid(pid, None).map_err(|_| format!("Unable to wait for child PID {}", pid))
+pub fn wait_child(pid: Pid) -> Result<nix::sys::wait::WaitStatus, String> {
+    wait::waitpid(pid, Some(wait::WaitPidFlag::__WALL))
+        .map_err(|e| format!("Unable to wait for child PID {}: {:?}", pid, e))
+}
+
+fn handle_pid_stop(
+    child: &mut ProcessState,
+    pid: Pid,
+    sig: nix::sys::signal::Signal,
+    app: &App,
+    conf: &mut ProcessConf,
+    platform_handler: &impl PlatformHandler,
+) -> Result<(), String> {
+    match sig {
+        nix::sys::signal::Signal::SIGTRAP => {
+            match child.trace_state {
+                ProcessTraceState::RunningAwaitSyscall => {
+                    child.trace_state = ProcessTraceState::TraceSyscallEnterStop;
+
+                    // Get syscall details
+                    match ptrace::getregs(pid) {
+                        Ok(mut regs) => {
+                            let syscall_id = regs.orig_rax;
+
+                            child.syscall_id = Some(syscall_id);
+                            child.handler_res = Some(syscalls::handle_pre_syscall(
+                                app,
+                                conf,
+                                child,
+                                platform_handler,
+                                pid,
+                                &mut regs,
+                            ));
+
+                            // Execute this child syscall
+                            ptrace::syscall(pid).map_err(|_| {
+                                format!("Unable to restart syscall exit for PID {:?}", pid)
+                            })?;
+                        }
+                        Err(err) => {
+                            if err.as_errno() == Some(nix::errno::Errno::ESRCH) {
+                                child.trace_state = ProcessTraceState::Terminated(-1);
+                            } else {
+                                warn!("Unable to get syscall registers after servicing");
+                            }
+                        }
+                    }
+                }
+                ProcessTraceState::TraceSyscallEnterStop => {
+                    child.trace_state = ProcessTraceState::TraceSyscallExitStop;
+
+                    // Get syscall result
+                    match ptrace::getregs(pid) {
+                        Ok(ref mut regs) => {
+                            syscalls::handle_post_syscall(child, platform_handler, pid, regs);
+
+                            child.syscall_id = None;
+                            child.handler_res = None;
+
+                            // Await next child syscall
+                            ptrace::syscall(pid).map_err(|_| {
+                                format!("Unable to restart syscall entry wait for PID {:?}", pid)
+                            })?;
+
+                            child.trace_state = ProcessTraceState::RunningAwaitSyscall;
+                        }
+                        Err(err) => {
+                            if err.as_errno() == Some(nix::errno::Errno::ESRCH) {
+                                child.trace_state = ProcessTraceState::Terminated(-1);
+                            } else {
+                                warn!("Unable to get syscall registers after servicing");
+                            }
+                        }
+                    };
+                }
+                _ => {
+                    warn!("STUB: Unhandled process state ({:?})", pid);
+                }
+            };
+            Ok(())
+        }
+        nix::sys::signal::Signal::SIGSTOP => {
+            ptrace::syscall(pid)
+                .map_err(|_| format!("Unable to restart PID {:?} for syscall entry wait", pid))?;
+            Ok(())
+        }
+        nix::sys::signal::Signal::SIGCHLD => {
+            ptrace::syscall(pid)
+                .map_err(|_| format!("Unable to restart PID {:?} for syscall entry wait", pid))?;
+            Ok(())
+        }
+        nix::sys::signal::Signal::SIGTERM => {
+            info!("SIGTERM received for PID {:?}", pid);
+
+            // TODO: get exit status
+            child.trace_state = ProcessTraceState::Terminated(-1);
+
+            Ok(())
+        }
+        _ => {
+            ptrace::syscall(pid)
+                .map_err(|_| format!("Unable to restart PID {:?} for syscall entry wait", pid))?;
+            Err(format!("{:?}: unhandled signal {:?}", pid, sig))
+        }
+    }
+}
+
+fn handle_wait_status(
+    wait_status: &wait::WaitStatus,
+    processes: &mut ProcessList,
+    app: &App,
+    conf: &mut ProcessConf,
+    platform_handler: &impl PlatformHandler,
+) -> Result<(), String> {
+    match wait_status {
+        wait::WaitStatus::Stopped(pid, status) => {
+            if !processes.0.contains_key(&pid) {
+                trace!("New process (stopped): {:?}", pid);
+                processes.0.insert(
+                    *pid,
+                    ProcessState::new(ProcessTraceState::Stopped, ProcessType::ForkedProcess),
+                );
+                ptrace::syscall(*pid)
+                    .map_err(|_| format!("Unable to start PID {:?} for syscall entry wait", pid))?;
+            } else if let Some(mut child) = processes.0.get_mut(&pid) {
+                if child.trace_state == ProcessTraceState::Created {
+                    trace!(
+                        "PID {:?} was previously marked as created, setting to RunningAwaitSyscall...",
+                        pid
+                    );
+                    ptrace::syscall(*pid).map_err(|_| {
+                        format!(
+                            "Unable to start newly-created PID {:?} for syscall entry wait",
+                            pid
+                        )
+                    })?;
+                    child.trace_state = ProcessTraceState::RunningAwaitSyscall;
+                } else {
+                    handle_pid_stop(child, *pid, *status, app, conf, platform_handler)?;
+                }
+            };
+            Ok(())
+        }
+
+        wait::WaitStatus::PtraceEvent(pid, sig, ev_type) => {
+            if let nix::sys::signal::Signal::SIGTRAP = sig {
+            } else {
+                warn!(
+                    "PtraceEvent received, but signal type is unknown ({:?})",
+                    sig
+                );
+            }
+
+            // TODO: stop using Linux hard-coded event IDs
+            let cont = match ev_type {
+                1 => {
+                    info!("Process {:?} forked", pid);
+                    true
+                }
+                2 => {
+                    info!("Process {:?} vforked", pid);
+                    true
+                }
+                3 => {
+                    info!("Process {:?} created clone", pid);
+                    true
+                }
+                4 => {
+                    info!("Process {:?} called exec", pid);
+                    false
+                }
+                t => {
+                    warn!("Process {:?}: unknown event type {}", pid, t);
+                    false
+                }
+            };
+
+            if cont {
+                if let Ok(child_pid) = ptrace::getevent(*pid) {
+                    let child_pid = Pid::from_raw(child_pid as i32);
+                    info!("New child PID: {:?}", child_pid);
+                    let child_type = match ev_type {
+                        1 => ProcessType::ForkedProcess,
+                        2 => ProcessType::VForkedProcess,
+                        3 => ProcessType::ClonedThread,
+                        _ => ProcessType::ForkedProcess,
+                    };
+                    processes.0.entry(child_pid)
+                        .and_modify(|ch| {
+                            if ch.trace_state == ProcessTraceState::Stopped {
+                                info!("Changing existing Stopped process {:?} to RunningAwaitSyscall ({:?})...", child_pid, ch);
+                                ch.trace_state = ProcessTraceState::RunningAwaitSyscall;
+                                ch.process_type = child_type;
+                            }
+                        })
+                        .or_insert_with(|| {
+                            info!("Process does not exist, adding as Created...");
+                            ProcessState::new(ProcessTraceState::Created, child_type)
+                        });
+                }
+            }
+
+            // Restart PID that sent event (parent of newly-created PID)
+            ptrace::syscall(*pid)
+                .map_err(|_| format!("Unable to restart PID {:?} for syscall entry wait", pid))?;
+
+            Ok(())
+        }
+
+        wait::WaitStatus::Exited(pid, code) => {
+            info!("Child process {:?} exited with code {}", pid, code);
+            if let Some(mut child) = processes.0.get_mut(&pid) {
+                child.trace_state = ProcessTraceState::Terminated(*code as isize);
+            }
+            Ok(())
+        }
+
+        _ => Ok(()),
+    }
 }
 
 pub fn child_loop(
     app: &App,
-    child: unistd::Pid,
+    tracee_pid: Pid,
     platform_handler: impl PlatformHandler,
     conf: &mut ProcessConf,
-) -> Result<ProcessState, String> {
-    let mut state = ProcessState::new();
+) -> Result<ProcessList, String> {
+    let mut processes: ProcessList = ProcessList::new();
+
+    processes.0.insert(
+        tracee_pid,
+        ProcessState::new(
+            ProcessTraceState::RunningAwaitSyscall,
+            ProcessType::MainTracee,
+        ),
+    );
 
     // Flag to indicate if a SIGINT has been received
     let sigint = Arc::new(AtomicBool::new(false));
@@ -145,68 +395,47 @@ pub fn child_loop(
         // Check "sigint" flag: if set, kill the tracee process and break from the loop
         if sigint.load(Ordering::Relaxed) {
             warn!("SIGINT received, killing tracee process...");
-            if let Err(e) = signal::kill(child, signal::Signal::SIGTERM) {
+            if let Err(e) = signal::kill(tracee_pid, signal::Signal::SIGTERM) {
                 warn!("Unable to send SIGTERM to tracee process: {}", e);
             }
             break;
         }
 
-        // Await next child syscall
-        if ptrace::syscall(child).is_err() {
-            warn!("Unable to ask for next child syscall");
-            break;
-        };
-        wait_child(child)?;
-
-        // Get syscall details
-        match ptrace::getregs(child) {
-            Ok(mut regs) => {
-                let syscall_id = regs.orig_rax;
-
-                let handler_res = syscalls::handle_pre_syscall(
-                    app,
-                    conf,
-                    &mut state,
-                    &platform_handler,
-                    child,
-                    syscall_id,
-                    &mut regs,
-                );
-
-                // Execute this child syscall
-                ptrace::syscall(child).map_err(|_| "Unable to execute current child syscall")?;
-                wait_child(child)?;
-
-                // Get syscall result
-                match ptrace::getregs(child) {
-                    Ok(ref mut regs) => {
-                        syscalls::handle_post_syscall(
-                            handler_res,
-                            &mut state,
-                            &platform_handler,
-                            child,
-                            syscall_id,
-                            regs,
-                        );
-                    }
-                    Err(err) => {
-                        if err.as_errno() == Some(nix::errno::Errno::ESRCH) {
-                            debug!("Child process terminated");
-                            break;
-                        }
-                        warn!("Unable to get syscall registers after servicing");
-                    }
-                };
+        // Wait for any child process (-1)
+        let wait_status = wait_child(Pid::from_raw(-1 as i32));
+        if let Ok(ws) = wait_status {
+            if let Err(s) = handle_wait_status(&ws, &mut processes, app, conf, &platform_handler) {
+                warn!("{}", s);
             }
-            Err(err) => {
-                warn!("Unable to get syscall registers before servicing");
-                if err.as_errno() == Some(nix::errno::Errno::ESRCH) {
-                    debug!("Child process terminated");
+        } else {
+            warn!("{:?}", wait_status);
+            break;
+        }
+
+        // If main process contains only clones (threads) then break from loop when this process
+        // terminates.  Otherwise (e.g. forks), only break when all processes have terminated.
+        if let Some(main_child) = processes.0.get(&tracee_pid) {
+            if let ProcessTraceState::Terminated(main_exit_status) = main_child.trace_state {
+                // Check if all child processes are ClonedThread
+                let mut exit = false;
+                if processes.all_threads(tracee_pid) {
+                    info!("All remaining processes are threads, exiting trace loop...");
+                    exit = true;
+                } else if processes.all_terminated() {
+                    info!("All processes are now terminated, exiting trace loop...");
+                    exit = true;
+                }
+
+                if exit {
+                    info!(
+                        "Main tracee process {:?} has terminated with code {}",
+                        tracee_pid, main_exit_status
+                    );
                     break;
                 }
             }
-        };
+        }
     }
 
-    Ok(state)
+    Ok(processes)
 }

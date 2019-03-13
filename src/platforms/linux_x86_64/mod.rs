@@ -30,11 +30,10 @@ impl crate::platforms::PlatformHandler for Handler {
         state: &mut ProcessState,
         regs: &mut SyscallRegs,
         pid: Pid,
-        syscall_id: usize,
     ) -> bool {
-        match syscall_id {
+        match state.syscall_id {
             // read
-            0 => {
+            Some(0) => {
                 info!(
                     "Child process {} will read {} bytes from FD {} into buffer at 0x{:X}",
                     pid, regs.rdx, regs.rdi, regs.rsi
@@ -48,7 +47,7 @@ impl crate::platforms::PlatformHandler for Handler {
             }
 
             // write
-            1 => {
+            Some(1) => {
                 info!(
                     "Child process {} will write {} bytes to FD {} from buffer at 0x{:X}",
                     pid, regs.rdx, regs.rdi, regs.rsi
@@ -61,7 +60,7 @@ impl crate::platforms::PlatformHandler for Handler {
             }
 
             // open
-            2 => {
+            Some(2) => {
                 info!(
                     "Child process {} will open a file with flags {:?} and mode {:?}",
                     pid,
@@ -81,7 +80,7 @@ impl crate::platforms::PlatformHandler for Handler {
             }
 
             // close
-            3 => {
+            Some(3) => {
                 info!("Child process {} wants to close FD {}", pid, regs.rdi);
                 {
                     let file = state.file_by_fd(regs.rdi as usize);
@@ -99,19 +98,19 @@ impl crate::platforms::PlatformHandler for Handler {
             }
 
             // socket
-            41 => {
+            Some(41) => {
                 sockets::handle_socket_pre(state, regs, pid);
                 true
             }
 
             // connect
-            42 => {
+            Some(42) => {
                 sockets::handle_connect_pre(state, regs, pid);
                 true
             }
 
             // openat
-            257 => {
+            Some(257) => {
                 info!(
                     "Child process {} will open a file with flags {:?} and mode {:?} at dirfd {}",
                     pid,
@@ -132,8 +131,8 @@ impl crate::platforms::PlatformHandler for Handler {
             }
             _ => {
                 trace!(
-                    "Unhandled syscall {} ({:X}, {:X}, {:X}, {:X}, {:X}, {:X})",
-                    syscall_id,
+                    "Unhandled syscall {:?} ({:X}, {:X}, {:X}, {:X}, {:X}, {:X})",
+                    state.syscall_id,
                     regs.rdi,
                     regs.rsi,
                     regs.rdx,
@@ -148,36 +147,34 @@ impl crate::platforms::PlatformHandler for Handler {
 
     fn post(
         &self,
-        pre_result: HandleSyscallResult,
         state: &mut ProcessState,
         regs: &mut SyscallRegs,
         pid: Pid,
-        syscall_id: usize,
     ) {
-        match pre_result {
-            HandleSyscallResult::BlockedHard => {
+        match state.handler_res {
+            Some(HandleSyscallResult::BlockedHard) => {
                 if let Ok(()) = self.update_regs_hard_block(pid, regs) {
-                    match syscall_id {
+                    match state.syscall_id {
                         // open
-                        2 => {
+                        Some(2) => {
                             // Set the pending file open as blocked
                             state.update_pending_file_state(ProcessFileState::OpenBlockedHard);
                         }
 
                         // socket
-                        41 => {
+                        Some(41) => {
                             state.update_pending_socket_state(ProcessSocketState::CreateBlockedHard);
                         }
 
                         // connect
-                        42 => {
+                        Some(42) => {
                             if let Some(ref mut sock) = state.socket_by_fd(regs.rdi as usize) {
                                 sock.connection_state = SocketConnectionState::ConnectBlockedHard;
                             }
                         }
 
                         // openat
-                        257 => {
+                        Some(257) => {
                             // Set the pending file open as blocked
                             state.update_pending_file_state(ProcessFileState::OpenBlockedHard);
                         }
@@ -185,17 +182,17 @@ impl crate::platforms::PlatformHandler for Handler {
                     };
                 };
             }
-            HandleSyscallResult::BlockedSoft => {
-                match syscall_id {
+            Some(HandleSyscallResult::BlockedSoft) => {
+                match state.syscall_id {
                     // read
-                    0 => {
+                    Some(0) => {
                         // Set return value to number of bytes intended to be read to simulate success
                         regs.rax = regs.rdx;
                         update_registers(pid, regs).unwrap_or_else(|e| error!("{}", e));
                     }
 
                     // write
-                    1 => {
+                    Some(1) => {
                         // Set return value to number of bytes intended to be written to simulate
                         // success
                         regs.rax = regs.rdx;
@@ -203,7 +200,7 @@ impl crate::platforms::PlatformHandler for Handler {
                     }
 
                     // open
-                    2 => {
+                    Some(2) => {
                         // TODO: simulate open return
                         regs.rax = 5;
                         update_registers(pid, regs).unwrap_or_else(|e| error!("{}", e));
@@ -213,7 +210,7 @@ impl crate::platforms::PlatformHandler for Handler {
                     }
 
                     // socket
-                    41 => {
+                    Some(41) => {
                         // TODO: simulate socket return
                         regs.rax = 5;
                         update_registers(pid, regs).unwrap_or_else(|e| error!("{}", e));
@@ -222,7 +219,7 @@ impl crate::platforms::PlatformHandler for Handler {
                     }
 
                     // connect
-                    42 => {
+                    Some(42) => {
                         // TODO: simulate connect return
                         if let Some(ref mut sock) = state.socket_by_fd(regs.rdi as usize) {
                             sock.connection_state = SocketConnectionState::ConnectBlockedSoft;
@@ -230,7 +227,7 @@ impl crate::platforms::PlatformHandler for Handler {
                     }
 
                     // openat
-                    257 => {
+                    Some(257) => {
                         // TODO: simulate openat return
                         regs.rax = 5;
                         update_registers(pid, regs).unwrap_or_else(|e| error!("{}", e));
@@ -241,20 +238,20 @@ impl crate::platforms::PlatformHandler for Handler {
                     _ => (),
                 }
             }
-            HandleSyscallResult::Unchanged => {
-                match syscall_id {
+            Some(HandleSyscallResult::Unchanged) => {
+                match state.syscall_id {
                     // read
-                    0 => {
+                    Some(0) => {
                         // TODO: update file read bytes in state
                     }
 
                     // write
-                    1 => {
+                    Some(1) => {
                         // TODO: update file write bytes in state
                     }
 
                     // open
-                    2 => {
+                    Some(2) => {
                         // Set file state according to return value
                         if (regs.rax as isize) < 0 {
                             state.update_pending_file_state(ProcessFileState::CouldNotOpen(
@@ -268,13 +265,13 @@ impl crate::platforms::PlatformHandler for Handler {
                     }
 
                     // close
-                    3 => {
+                    Some(3) => {
                         state.update_file_state_by_fd(regs.rdi as usize, ProcessFileState::Closed);
                         state.update_socket_state_by_fd(regs.rdi as usize, ProcessSocketState::Closed);
                     }
 
                     // socket
-                    41 => {
+                    Some(41) => {
                         // Set socket state according to return value
                         if (regs.rax as isize) < 0 {
                             state.update_pending_socket_state(ProcessSocketState::CouldNotCreate(
@@ -288,7 +285,7 @@ impl crate::platforms::PlatformHandler for Handler {
                     }
 
                     // connect
-                    42 => {
+                    Some(42) => {
                         if let Some(ref mut sock) = state.socket_by_fd(regs.rdi as usize) {
                             if (regs.rax as isize) < 0 {
                                 sock.connection_state = SocketConnectionState::ConnectError(
@@ -301,7 +298,7 @@ impl crate::platforms::PlatformHandler for Handler {
                     }
 
                     // openat
-                    257 => {
+                    Some(257) => {
                         // Set file state according to return value
                         if (regs.rax as isize) < 0 {
                             state.update_pending_file_state(ProcessFileState::CouldNotOpen(
@@ -318,6 +315,7 @@ impl crate::platforms::PlatformHandler for Handler {
                     },
                 };
             }
+            _ => {},
         }
     }
 
