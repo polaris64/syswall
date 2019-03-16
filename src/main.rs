@@ -35,22 +35,28 @@ fn main() -> Result<(), String> {
             info!("Tracing child process {} ({:?})", child, child_cmd);
 
             // Wait for child and set trace options
-            child_process::wait_child(child)?;
+            child_process::wait_child(child, false)?;
             ptrace::setoptions(
                 child,
                 ptrace::Options::PTRACE_O_EXITKILL
+                    
+                    // Trace sub-processes of tracee
                     | ptrace::Options::PTRACE_O_TRACECLONE
-                    | ptrace::Options::PTRACE_O_TRACEEXEC
                     | ptrace::Options::PTRACE_O_TRACEFORK
                     | ptrace::Options::PTRACE_O_TRACEVFORK
-                    | ptrace::Options::PTRACE_O_TRACEVFORKDONE, // PTRACE_O_TRACEEXIT will stop the tracee before exit in order to examine
-                                                                // registers. This is not required; without this option the tracer will be notified
-                                                                // after tracee exit.
-                                                                // ptrace::Options::PTRACE_O_TRACEEXIT
+                    | ptrace::Options::PTRACE_O_TRACEVFORKDONE
 
-                                                                // TODO: PTRACE_O_TRACESYSGOOD: recommended by strace README-linux-ptrace, however
-                                                                // seems to freeze
-                                                                // ptrace::Options::PTRACE_O_TRACESYSGOOD |
+                    | ptrace::Options::PTRACE_O_TRACEEXEC
+
+                    // PTRACE_O_TRACESYSGOOD: recommended by strace README-linux-ptrace. Causes
+                    // WaitStatus::PtraceSyscall to be generated instead of WaitStatus::Stopped
+                    // upon syscall in tracee.
+                    | ptrace::Options::PTRACE_O_TRACESYSGOOD,
+
+                    // PTRACE_O_TRACEEXIT will stop the tracee before exit in order to examine
+                    // registers. This is not required; without this option the tracer will be notified
+                    // after tracee exit.
+                    // ptrace::Options::PTRACE_O_TRACEEXIT
             )
             .map_err(|_| "Unable to set PTRACE_O_* options for child process")?;
 
