@@ -13,7 +13,7 @@ syswall is a very early prototype and as such only a small amount of the planned
 
 The handling of syscalls is of course very much platform-dependent.  syswall separates the program fuctionality from the actual code to handle particular syscalls, meaning that support for other platforms shold be relatively easy to integrate.  So far however only the Linux x86_64 platform is supported.
 
-From the Linux x86_64 platform, only a relatively small number of syscalls are actively handled at present.  These consist of open, close, read and write, meaning that currently syswall can manage the child preccess's file handle state only.
+From the Linux x86_64 platform, only a relatively small number of syscalls are actively handled at present.  Currently this includes file I/O and some socket syscalls only.
 
 ### `strace`
 syswall can be run with the -vv switch causing it to display all syscalls and results.  This provides similar functionality to the `strace` tool, without the interpretation of syscall arguments as yet.
@@ -34,7 +34,7 @@ The choices made during execution can be saved to a JSON file.  This file can th
 This is a work in progress: only always allowed/blocked answers will be saved.
 
 ### Reporting
-When the child process terminates, syswall will output a brief report about the child process's syscalls.  Currently this consists of all files opened or blocked but will be expanded upon in future versions.
+When the child process terminates, syswall will output a brief report about the child process's syscalls.  Currently this consists of all files and sockets opened or blocked but will be expanded upon in future versions.
 
 ## Future plans
 There is a large to-do list for the project, but some of the highlights are: -

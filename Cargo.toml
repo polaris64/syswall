@@ -1,6 +1,6 @@
 [package]
 name = "syswall"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Simon Pugnet <simon@polaris64.net>"]
 edition = "2018"
 
