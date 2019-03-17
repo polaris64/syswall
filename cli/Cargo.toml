@@ -1,0 +1,16 @@
+[package]
+name = "syswall_cli"
+version = "0.2.0"
+authors = ["Simon Pugnet <simon@polaris64.net>"]
+edition = "2018"
+
+[dependencies]
+clap = "2.32.0"
+log = "0.4.6"
+
+[dependencies.syswall]
+path = "../lib"
+
+[[bin]]
+name = "syswall_cli"
+path = "src/main.rs"

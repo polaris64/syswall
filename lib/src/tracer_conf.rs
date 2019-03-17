@@ -5,6 +5,9 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 
+use crate::syscalls::SyscallQuery;
+use crate::user_response::UserResponse;
+
 #[derive(Debug, Deserialize, Serialize)]
 pub enum SyscallConfig {
     Allowed,
@@ -15,11 +18,11 @@ pub enum SyscallConfig {
 pub type SyscallConfigMap = HashMap<usize, SyscallConfig>;
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct ProcessConf {
+pub struct TracerConf {
     pub syscalls: SyscallConfigMap,
 }
 
-impl ProcessConf {
+impl TracerConf {
     pub fn new() -> Self {
         Self {
             syscalls: HashMap::new(),
@@ -43,5 +46,19 @@ impl ProcessConf {
         let path = Path::new(filename);
         let mut file = File::create(&path)?;
         file.write_all(ser.as_bytes()).map_err(|e| e.into())
+    }
+}
+
+pub struct RuntimeConf<'a> {
+    pub syscall_cb: Option<Box<Fn(SyscallQuery) -> UserResponse + 'a>>,
+}
+
+impl<'a> RuntimeConf<'a> {
+    pub fn new() -> Self {
+        Self { syscall_cb: None }
+    }
+
+    pub fn set_syscall_cb(&mut self, cb: Box<Fn(SyscallQuery) -> UserResponse + 'a>) {
+        self.syscall_cb = Some(cb);
     }
 }

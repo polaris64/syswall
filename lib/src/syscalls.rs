@@ -3,11 +3,26 @@ use log::debug;
 use nix::sys::ptrace;
 use nix::unistd;
 
-use crate::app::{App, UserResponse};
-use crate::process_conf::{ProcessConf, SyscallConfig};
-use crate::process_state::ProcessState;
-
 use crate::platforms::PlatformHandler;
+use crate::process_state::ProcessState;
+use crate::tracer_conf::{RuntimeConf, SyscallConfig, TracerConf};
+use crate::user_response::UserResponse;
+
+pub struct SyscallQuery<'a> {
+    id: usize,
+    pid: unistd::Pid,
+    regs: &'a SyscallRegs,
+}
+
+impl<'a> SyscallQuery<'a> {
+    pub fn new(id: usize, pid: unistd::Pid, regs: &'a SyscallRegs) -> Self {
+        Self {
+            id,
+            pid,
+            regs,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum HandleSyscallResult {
@@ -19,8 +34,8 @@ pub enum HandleSyscallResult {
 pub type SyscallRegs = libc::user_regs_struct;
 
 pub fn handle_pre_syscall(
-    app: &App,
-    config: &mut ProcessConf,
+    config: &mut TracerConf,
+    runtime_conf: &RuntimeConf,
     state: &mut ProcessState,
     platform_handler: &impl PlatformHandler,
     pid: unistd::Pid,
@@ -29,7 +44,7 @@ pub fn handle_pre_syscall(
     let handled = platform_handler.pre(state, regs, pid);
 
     if handled {
-        syscall_choice(app, config, platform_handler, pid, state.syscall_id, regs)
+        syscall_choice(config, runtime_conf, platform_handler, pid, state.syscall_id, regs)
             .unwrap_or(HandleSyscallResult::Unchanged)
     } else {
         HandleSyscallResult::Unchanged
@@ -46,8 +61,8 @@ pub fn handle_post_syscall(
 }
 
 fn syscall_choice(
-    app: &App,
-    config: &mut ProcessConf,
+    config: &mut TracerConf,
+    runtime_conf: &RuntimeConf,
     platform_handler: &impl PlatformHandler,
     pid: unistd::Pid,
     syscall_id: Option<u64>,
@@ -73,7 +88,49 @@ fn syscall_choice(
                 }
             }
         },
-        None => match app.get_user_input(UserResponse::AllowOnce)? {
+        None =>
+            match runtime_conf.syscall_cb {
+                Some(ref cb) => {
+                    let query = SyscallQuery::new(
+                        syscall_id.unwrap() as usize,
+                        pid,
+                        regs,
+                    );
+                    match cb(query) {
+                        UserResponse::AllowAllSyscall => {
+                            config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::Allowed)
+                        }
+                        UserResponse::BlockAllSyscallHard => {
+                            if let Ok(()) = platform_handler.block_syscall(pid, regs) {
+                                res = HandleSyscallResult::BlockedHard;
+                            }
+                            config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::HardBlocked);
+                        }
+                        UserResponse::BlockOnceHard => {
+                            if let Ok(()) = platform_handler.block_syscall(pid, regs) {
+                                res = HandleSyscallResult::BlockedHard;
+                            }
+                        }
+                        UserResponse::BlockAllSyscallSoft => {
+                            if let Ok(()) = platform_handler.block_syscall(pid, regs) {
+                                res = HandleSyscallResult::BlockedSoft;
+                            }
+                            config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::SoftBlocked);
+                        }
+                        UserResponse::BlockOnceSoft => {
+                            if let Ok(()) = platform_handler.block_syscall(pid, regs) {
+                                res = HandleSyscallResult::BlockedSoft;
+                            }
+                        }
+                        _ => (),
+                    };
+                }
+                None => {
+                    res = HandleSyscallResult::Unchanged;
+                }
+            }
+            /*
+        match app.get_user_input(UserResponse::AllowOnce)? {
             UserResponse::AllowAllSyscall => {
                 config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::Allowed)
             }
@@ -101,6 +158,7 @@ fn syscall_choice(
             }
             _ => (),
         },
+        */
     };
 
     Ok(res)
