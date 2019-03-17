@@ -10,18 +10,13 @@ use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::platforms::PlatformHandler;
 use crate::process_state::{ProcessState, ProcessTraceState, ProcessType};
 use crate::syscalls;
-use crate::tracer_conf::{RuntimeConf, TracerConf};
 
+#[derive(Default)]
 pub struct ProcessList(pub HashMap<Pid, ProcessState>);
 
 impl ProcessList {
-    pub fn new() -> Self {
-        Self(HashMap::new())
-    }
-
     /// Returns a flag which is set if all processes are of type ClonedThread
     pub fn all_threads(&self, tracee_pid: Pid) -> bool {
         self.0.iter().all(|(pid, child_state)| {
@@ -180,14 +175,11 @@ pub fn wait_child(pid: Pid, nohang: bool) -> Result<nix::sys::wait::WaitStatus, 
 ///
 ///   - child: ProcessState of the child process receiving the event
 ///   - pid: PID of the child process receiving the event
-///   - conf: tracer configuration, which will be modified based on user responses to syscall
-///   - platform_handler: platform-specific handler used to deal with syscall entry/exit
+///   - syscall_handler: current syscall handler
 fn handle_pid_syscall(
     child: &mut ProcessState,
     pid: Pid,
-    conf: &mut TracerConf,
-    runtime_conf: &RuntimeConf,
-    platform_handler: &impl PlatformHandler,
+    syscall_handler: &mut syscalls::SyscallHandler,
 ) -> Result<(), String> {
     match child.trace_state {
 
@@ -201,14 +193,7 @@ fn handle_pid_syscall(
                     let syscall_id = regs.orig_rax;
 
                     child.syscall_id = Some(syscall_id);
-                    child.handler_res = Some(syscalls::handle_pre_syscall(
-                        conf,
-                        runtime_conf,
-                        child,
-                        platform_handler,
-                        pid,
-                        &mut regs,
-                    ));
+                    child.handler_res = Some(syscall_handler.handle_pre_syscall(child, pid, &mut regs));
 
                     // Execute this child syscall
                     ptrace::syscall(pid)
@@ -236,7 +221,7 @@ fn handle_pid_syscall(
             // Get syscall result
             match ptrace::getregs(pid) {
                 Ok(ref mut regs) => {
-                    syscalls::handle_post_syscall(child, platform_handler, pid, regs);
+                    syscall_handler.handle_post_syscall(child, pid, regs);
 
                     child.syscall_id = None;
                     child.handler_res = None;
@@ -278,14 +263,11 @@ fn handle_pid_syscall(
 ///   - pid: PID of the child process receiving the event
 ///   - sig: specific signal received by child process
 fn handle_pid_stop(child: &mut ProcessState, pid: Pid, sig: signal::Signal) {
-    match sig {
-        signal::Signal::SIGTERM => {
-            info!("SIGTERM received for PID {:?}", pid);
+    if let signal::Signal::SIGTERM = sig {
+        info!("SIGTERM received for PID {:?}", pid);
 
-            // TODO: get exit status
-            child.trace_state = ProcessTraceState::Terminated(-1);
-        }
-        _ => {}
+        // TODO: get exit status
+        child.trace_state = ProcessTraceState::Terminated(-1);
     };
 }
 
@@ -295,14 +277,11 @@ fn handle_pid_stop(child: &mut ProcessState, pid: Pid, sig: signal::Signal) {
 ///
 ///   - wait_status: status returned by wait_child()
 ///   - processes: ProcessList which can be modified if the child cloned/forked.
-///   - conf: tracer configuration, which will be modified based on user responses to syscall
-///   - platform_handler: platform-specific handler used to deal with syscall entry/exit
+///   - syscall_handler: current syscall handler
 fn handle_wait_status(
     wait_status: &wait::WaitStatus,
     processes: &mut ProcessList,
-    conf: &mut TracerConf,
-    runtime_conf: &RuntimeConf,
-    platform_handler: &impl PlatformHandler,
+    syscall_handler: &mut syscalls::SyscallHandler,
 ) -> Result<(), String> {
     match wait_status {
         // Handle the continuation of a child process after a stop
@@ -314,7 +293,7 @@ fn handle_wait_status(
         // Handle exit of a child process
         wait::WaitStatus::Exited(pid, code) => {
             info!("Child process {:?} exited with code {}", pid, code);
-            let mut child = processes.0.get_mut(&pid).ok_or(format!(
+            let mut child = processes.0.get_mut(&pid).ok_or_else(|| format!(
                 "Child process {:?} exited, however this process is not in the process list",
                 pid
             ))?;
@@ -394,11 +373,11 @@ fn handle_wait_status(
         // When PTRACE_O_TRACESYSGOOD is set, PtraceSyscall will be generated when a process has
         // hit a syscall entery/exit.  Handle the syscall via handle_pid_syscall().
         wait::WaitStatus::PtraceSyscall(pid) => {
-            let child = processes.0.get_mut(&pid).ok_or(format!(
+            let child = processes.0.get_mut(&pid).ok_or_else(|| format!(
                 "Syscall was delivered by {:?} but process was not found in the process list",
                 pid
             ))?;
-            handle_pid_syscall(child, *pid, conf, runtime_conf, platform_handler)
+            handle_pid_syscall(child, *pid, syscall_handler)
         }
 
         // Handle a generic signal to a child process: log signal and restart child via
@@ -469,15 +448,9 @@ fn handle_wait_status(
 /// Arguments
 ///
 ///   - tracee_pid: PID of the main tracee process (which should have been executed via exec_child())
-///   - platform_handler: platform-specific handler used to deal with syscalls
-///   - conf: tracer configuration
-pub fn child_loop(
-    tracee_pid: Pid,
-    platform_handler: impl PlatformHandler,
-    conf: &mut TracerConf,
-    runtime_conf: &RuntimeConf,
-) -> Result<ProcessList, String> {
-    let mut processes: ProcessList = ProcessList::new();
+///   - syscall_handler: current syscall handler
+pub fn child_loop(tracee_pid: Pid, syscall_handler: &mut syscalls::SyscallHandler) -> Result<ProcessList, String> {
+    let mut processes: ProcessList = ProcessList::default();
 
     // Flag to indicate if a SIGINT has been received
     let sigint = Arc::new(AtomicBool::new(false));
@@ -527,7 +500,7 @@ pub fn child_loop(
         // Wait for any child process (-1)
         let wait_status = wait_child(Pid::from_raw(-1 as i32), false);
         if let Ok(ws) = wait_status {
-            if let Err(s) = handle_wait_status(&ws, &mut processes, conf, runtime_conf, &platform_handler) {
+            if let Err(s) = handle_wait_status(&ws, &mut processes, syscall_handler) {
                 warn!("{}", s);
                 break;
             }

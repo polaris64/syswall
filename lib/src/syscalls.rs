@@ -1,5 +1,5 @@
 use libc;
-use log::debug;
+use log::{debug, trace};
 use nix::sys::ptrace;
 use nix::unistd;
 
@@ -9,17 +9,27 @@ use crate::tracer_conf::{RuntimeConf, SyscallConfig, TracerConf};
 use crate::user_response::UserResponse;
 
 pub struct SyscallQuery<'a> {
-    id: usize,
-    pid: unistd::Pid,
-    regs: &'a SyscallRegs,
+    pub configured_choice: Option<&'a SyscallConfig>,
+    pub id: usize,
+    pub pid: unistd::Pid,
+    pub regs: &'a SyscallRegs,
+    pub description: String,
 }
 
 impl<'a> SyscallQuery<'a> {
-    pub fn new(id: usize, pid: unistd::Pid, regs: &'a SyscallRegs) -> Self {
+    pub fn new(
+        configured_choice: Option<&'a SyscallConfig>,
+        id: usize,
+        pid: unistd::Pid,
+        regs: &'a SyscallRegs,
+        description: String,
+    ) -> Self {
         Self {
+            configured_choice,
             id,
             pid,
             regs,
+            description,
         }
     }
 }
@@ -33,135 +43,186 @@ pub enum HandleSyscallResult {
 
 pub type SyscallRegs = libc::user_regs_struct;
 
-pub fn handle_pre_syscall(
-    config: &mut TracerConf,
-    runtime_conf: &RuntimeConf,
-    state: &mut ProcessState,
-    platform_handler: &impl PlatformHandler,
-    pid: unistd::Pid,
-    regs: &mut SyscallRegs,
-) -> HandleSyscallResult {
-    let handled = platform_handler.pre(state, regs, pid);
+pub struct SyscallHandler<'a> {
+    config: &'a mut TracerConf,
+    runtime_conf: &'a RuntimeConf<'a>,
+    platform_handler: Box<PlatformHandler>,
+}
 
-    if handled {
-        syscall_choice(config, runtime_conf, platform_handler, pid, state.syscall_id, regs)
-            .unwrap_or(HandleSyscallResult::Unchanged)
-    } else {
-        HandleSyscallResult::Unchanged
+impl<'a> SyscallHandler<'a> {
+
+    pub fn new(config: &'a mut TracerConf, runtime_conf: &'a RuntimeConf<'a>, platform_handler: Box<PlatformHandler>) -> Self {
+        Self {
+            config,
+            runtime_conf,
+            platform_handler,
+        }
     }
-}
 
-pub fn handle_post_syscall(
-    state: &mut ProcessState,
-    platform_handler: &impl PlatformHandler,
-    pid: unistd::Pid,
-    regs: &mut SyscallRegs,
-) {
-    platform_handler.post(state, regs, pid);
-}
+    pub fn handle_pre_syscall(
+        &mut self,
+        state: &mut ProcessState,
+        pid: unistd::Pid,
+        regs: &mut SyscallRegs,
+    ) -> HandleSyscallResult {
+        let entry_res = self.platform_handler.pre(state, regs, pid);
 
-fn syscall_choice(
-    config: &mut TracerConf,
-    runtime_conf: &RuntimeConf,
-    platform_handler: &impl PlatformHandler,
-    pid: unistd::Pid,
-    syscall_id: Option<u64>,
-    regs: &mut SyscallRegs,
-) -> Result<HandleSyscallResult, &'static str> {
-    let mut res = HandleSyscallResult::Unchanged;
+        if entry_res.handled {
+            self.syscall_choice(
+                pid,
+                state.syscall_id,
+                regs,
+                entry_res.description,
+            )
+        } else {
+            trace!("{}", entry_res.description);
+            HandleSyscallResult::Unchanged
+        }
+    }
 
-    match config.syscalls.get(&(syscall_id.unwrap() as usize)) {
-        Some(conf) => match conf {
-            SyscallConfig::Allowed => {
-                debug!(" - Allowed by configuration");
-            }
-            SyscallConfig::HardBlocked => {
-                debug!(" - Hard-blocked by configuration");
-                if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                    res = HandleSyscallResult::BlockedHard;
+    pub fn handle_post_syscall(
+        &self,
+        state: &mut ProcessState,
+        pid: unistd::Pid,
+        regs: &mut SyscallRegs,
+    ) {
+        self.platform_handler.post(state, regs, pid);
+    }
+
+    fn syscall_choice(
+        &mut self,
+        pid: unistd::Pid,
+        syscall_id: Option<u64>,
+        regs: &mut SyscallRegs,
+        description: String,
+    ) -> HandleSyscallResult {
+
+        // Get optional existing decision from configuration
+        let conf_choice = self.config.syscalls.get(&(syscall_id.unwrap() as usize));
+
+        match self.runtime_conf.syscall_cb {
+
+            // A decision callback exists, so call it to allow for an optional change in decision
+            Some(ref cb) => {
+                let query = SyscallQuery::new(
+                    conf_choice,
+                    syscall_id.unwrap() as usize,
+                    pid,
+                    regs,
+                    description,
+                );
+
+                // Execute callback and get optional choice
+                match cb(query) {
+                    Some(choice) => {
+                        self.handle_user_response(
+                            choice,
+                            syscall_id.unwrap(),
+                            pid,
+                            regs,
+                        )
+                    }
+                    None => {
+                        self.handle_config_choice(
+                            conf_choice,
+                            pid,
+                            regs,
+                        )
+                    }
                 }
             }
-            SyscallConfig::SoftBlocked => {
-                debug!(" - Soft-blocked by configuration");
-                if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                    res = HandleSyscallResult::BlockedSoft;
-                }
+
+            // No decision callback exists, so handle the syscall using default or configured decision
+            None => {
+                self.handle_config_choice(
+                    conf_choice,
+                    pid,
+                    regs,
+                )
             }
-        },
-        None =>
-            match runtime_conf.syscall_cb {
-                Some(ref cb) => {
-                    let query = SyscallQuery::new(
-                        syscall_id.unwrap() as usize,
-                        pid,
-                        regs,
-                    );
-                    match cb(query) {
-                        UserResponse::AllowAllSyscall => {
-                            config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::Allowed)
-                        }
-                        UserResponse::BlockAllSyscallHard => {
-                            if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                                res = HandleSyscallResult::BlockedHard;
-                            }
-                            config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::HardBlocked);
-                        }
-                        UserResponse::BlockOnceHard => {
-                            if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                                res = HandleSyscallResult::BlockedHard;
-                            }
-                        }
-                        UserResponse::BlockAllSyscallSoft => {
-                            if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                                res = HandleSyscallResult::BlockedSoft;
-                            }
-                            config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::SoftBlocked);
-                        }
-                        UserResponse::BlockOnceSoft => {
-                            if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                                res = HandleSyscallResult::BlockedSoft;
-                            }
-                        }
-                        _ => (),
-                    };
-                }
-                None => {
-                    res = HandleSyscallResult::Unchanged;
-                }
-            }
-            /*
-        match app.get_user_input(UserResponse::AllowOnce)? {
+        }
+    }
+
+    fn handle_user_response(
+        &mut self,
+        choice: UserResponse,
+        syscall_id: u64,
+        pid: unistd::Pid,
+        regs: &mut SyscallRegs,
+    ) -> HandleSyscallResult {
+        match choice {
             UserResponse::AllowAllSyscall => {
-                config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::Allowed)
+                self.config.add_syscall_conf(syscall_id as usize, SyscallConfig::Allowed);
+                HandleSyscallResult::Unchanged
             }
             UserResponse::BlockAllSyscallHard => {
-                if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                    res = HandleSyscallResult::BlockedHard;
+                self.config.add_syscall_conf(syscall_id as usize, SyscallConfig::HardBlocked);
+                if let Ok(()) = self.platform_handler.block_syscall(pid, regs) {
+                    HandleSyscallResult::BlockedHard
+                } else {
+                    HandleSyscallResult::Unchanged
                 }
-                config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::HardBlocked);
             }
             UserResponse::BlockOnceHard => {
-                if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                    res = HandleSyscallResult::BlockedHard;
+                if let Ok(()) = self.platform_handler.block_syscall(pid, regs) {
+                    HandleSyscallResult::BlockedHard
+                } else {
+                    HandleSyscallResult::Unchanged
                 }
             }
             UserResponse::BlockAllSyscallSoft => {
-                if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                    res = HandleSyscallResult::BlockedSoft;
+                self.config.add_syscall_conf(syscall_id as usize, SyscallConfig::SoftBlocked);
+                if let Ok(()) = self.platform_handler.block_syscall(pid, regs) {
+                    HandleSyscallResult::BlockedSoft
+                } else {
+                    HandleSyscallResult::Unchanged
                 }
-                config.add_syscall_conf(syscall_id.unwrap() as usize, SyscallConfig::SoftBlocked);
             }
             UserResponse::BlockOnceSoft => {
-                if let Ok(()) = platform_handler.block_syscall(pid, regs) {
-                    res = HandleSyscallResult::BlockedSoft;
+                if let Ok(()) = self.platform_handler.block_syscall(pid, regs) {
+                    HandleSyscallResult::BlockedSoft
+                } else {
+                    HandleSyscallResult::Unchanged
                 }
             }
-            _ => (),
-        },
-        */
-    };
+            _ => HandleSyscallResult::Unchanged
+        }
+    }
 
-    Ok(res)
+    fn handle_config_choice(
+        &self,
+        syscall_conf: Option<&SyscallConfig>,
+        pid: unistd::Pid,
+        regs: &mut SyscallRegs,
+    ) -> HandleSyscallResult {
+        match syscall_conf {
+            Some(conf) => {
+                match conf {
+                    SyscallConfig::Allowed => {
+                        debug!(" - Allowed by configuration");
+                        HandleSyscallResult::Unchanged
+                    }
+                    SyscallConfig::HardBlocked => {
+                        debug!(" - Hard-blocked by configuration");
+                        if let Ok(()) = self.platform_handler.block_syscall(pid, regs) {
+                            HandleSyscallResult::BlockedHard
+                        } else {
+                            HandleSyscallResult::Unchanged
+                        }
+                    }
+                    SyscallConfig::SoftBlocked => {
+                        debug!(" - Soft-blocked by configuration");
+                        if let Ok(()) = self.platform_handler.block_syscall(pid, regs) {
+                            HandleSyscallResult::BlockedSoft
+                        } else {
+                            HandleSyscallResult::Unchanged
+                        }
+                    }
+                }
+            }
+            None => HandleSyscallResult::Unchanged,
+        }
+    }
 }
 
 pub fn update_registers(pid: unistd::Pid, regs: &SyscallRegs) -> Result<(), &'static str> {

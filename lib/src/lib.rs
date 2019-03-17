@@ -10,11 +10,13 @@ use nix::sys::ptrace;
 use nix::unistd;
 
 use crate::platforms::linux_x86_64::Handler;
+use crate::syscalls::SyscallHandler;
 use crate::tracer_conf::{RuntimeConf, TracerConf};
 
 pub fn trace(cmd: Vec<&str>, conf: &mut TracerConf, runtime_conf: &RuntimeConf) -> Result<child_process::ProcessList, String> {
-    // Create a syscall PlatformHandler
-    let platform_handler = Handler::new();
+    let mut syscall_handler = SyscallHandler::new(
+        conf, runtime_conf, Box::new(Handler::new()),
+    );
 
     // Fork this process
     let fork_res = unistd::fork().map_err(|_| "Unable to fork")?;
@@ -54,11 +56,11 @@ pub fn trace(cmd: Vec<&str>, conf: &mut TracerConf, runtime_conf: &RuntimeConf) 
                 .map_err(|_| "Unable to set child process to run until first syscall")?;
 
             // Execute main child process control loop
-            child_process::child_loop(child, platform_handler, conf, runtime_conf)
+            child_process::child_loop(child, &mut syscall_handler)
         }
         unistd::ForkResult::Child => {
             child_process::exec_child(cmd).map_err(|_| "Unable to execute child process")?;
-            Ok(child_process::ProcessList::new())
+            Ok(child_process::ProcessList::default())
         }
     }
 }

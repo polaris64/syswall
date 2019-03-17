@@ -1,11 +1,12 @@
 mod sockets;
 
-use log::{error, info, trace};
+use log::{error, trace};
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
 use nix::unistd::Pid;
 
 use crate::child_process;
+use crate::platforms::{PlatformHandler, SyscallEntryResult};
 use crate::process_state::ProcessState;
 use crate::process_state::files::ProcessFileState;
 use crate::process_state::sockets::{ProcessSocketState, SocketConnectionState};
@@ -19,7 +20,7 @@ impl Handler {
     }
 }
 
-impl crate::platforms::PlatformHandler for Handler {
+impl PlatformHandler for Handler {
     fn block_syscall(&self, pid: Pid, regs: &mut SyscallRegs) -> Result<(), &'static str> {
         regs.orig_rax = std::u64::MAX;
         update_registers(pid, regs)
@@ -30,38 +31,37 @@ impl crate::platforms::PlatformHandler for Handler {
         state: &mut ProcessState,
         regs: &mut SyscallRegs,
         pid: Pid,
-    ) -> bool {
+    ) -> SyscallEntryResult {
         match state.syscall_id {
             // read
             Some(0) => {
-                info!(
-                    "Child process {} will read {} bytes from FD {} into buffer at 0x{:X}",
-                    pid, regs.rdx, regs.rdi, regs.rsi
-                );
-                info!(
-                    " - FD {}: {:?}",
-                    regs.rdi,
-                    state.file_by_fd(regs.rdi as usize)
-                );
-                true
+                SyscallEntryResult::new(
+                    true, 
+                    format!(
+                        "Child process {} will read {} bytes from FD {} into buffer at 0x{:X}\n - File: {:?}",
+                        pid, regs.rdx, regs.rdi, regs.rsi, state.file_by_fd(regs.rdi as usize)
+                    ),
+                )
             }
 
             // write
             Some(1) => {
-                info!(
-                    "Child process {} will write {} bytes to FD {} from buffer at 0x{:X}",
-                    pid, regs.rdx, regs.rdi, regs.rsi
-                );
-                match child_process::get_child_buffer(pid, regs.rsi as usize, regs.rdx as usize) {
-                    Ok(buf) => info!(" - Child wants to write: {:?}", String::from(buf)),
-                    Err(e) => error!(" - Unable to read from child process buffer: {}", e),
-                };
-                true
+                SyscallEntryResult::new(
+                    true,
+                    format!(
+                        "Child process {} will write {} bytes to FD {} from buffer at 0x{:X}\n{}",
+                        pid, regs.rdx, regs.rdi, regs.rsi,
+                        match child_process::get_child_buffer(pid, regs.rsi as usize, regs.rdx as usize) {
+                            Ok(buf) => format!(" - To write: {:?}", String::from(buf)),
+                            Err(e) => format!(" - Unable to read from child process buffer: {}", e),
+                        },
+                    ),
+                )
             }
 
             // open
             Some(2) => {
-                info!(
+                let mut desc = format!(
                     "Child process {} will open a file with flags {:?} and mode {:?}",
                     pid,
                     OFlag::from_bits(regs.rsi as libc::c_int),
@@ -69,49 +69,49 @@ impl crate::platforms::PlatformHandler for Handler {
                 );
                 match child_process::get_child_buffer_cstr(pid, regs.rdi as usize) {
                     Ok(filepath) => {
-                        info!(" - File path: {:?}", filepath);
+                        desc = format!("{}\n{}", desc, format!(" - File path: {:?}", filepath));
 
                         // Add file to state
                         state.add_pending_file(&filepath, regs.rsi as isize, regs.rdx as isize);
                     }
-                    Err(e) => error!(" - Could not get file path: {}", e),
+                    Err(e) => {
+                        desc = format!("{}\n{}", desc, format!(" - Could not get file path: {}", e));
+                    }
                 };
-                true
+                SyscallEntryResult::new(true, desc)
             }
 
             // close
             Some(3) => {
-                info!("Child process {} wants to close FD {}", pid, regs.rdi);
+                let mut desc = format!("Child process {} wants to close FD {}", pid, regs.rdi);
                 {
                     let file = state.file_by_fd(regs.rdi as usize);
                     if file.is_some() {
-                        info!(" - FD {}: {:?}", regs.rdi, file);
+                        desc = format!("{}\n{}", desc, format!(" - File: {:?}", file));
                     }
                 }
                 {
                     let sock = state.socket_by_fd(regs.rdi as usize);
                     if sock.is_some() {
-                        info!(" - FD {}: {:?}", regs.rdi, sock);
+                        desc = format!("{}\n{}", desc, format!(" - Socket: {:?}", sock));
                     }
                 }
-                true
+                SyscallEntryResult::new(true, desc)
             }
 
             // socket
             Some(41) => {
-                sockets::handle_socket_pre(state, regs, pid);
-                true
+                SyscallEntryResult::new(true, sockets::handle_socket_pre(state, regs, pid))
             }
 
             // connect
             Some(42) => {
-                sockets::handle_connect_pre(state, regs, pid);
-                true
+                SyscallEntryResult::new(true, sockets::handle_connect_pre(state, regs, pid))
             }
 
             // openat
             Some(257) => {
-                info!(
+                let mut desc = format!(
                     "Child process {} will open a file with flags {:?} and mode {:?} at dirfd {}",
                     pid,
                     OFlag::from_bits(regs.rdx as libc::c_int),
@@ -120,27 +120,31 @@ impl crate::platforms::PlatformHandler for Handler {
                 );
                 match child_process::get_child_buffer_cstr(pid, regs.rsi as usize) {
                     Ok(filepath) => {
-                        info!(" - File path: {:?}", filepath);
+                        desc = format!("{}\n{}", desc, format!(" - File path: {:?}", filepath));
 
                         // Add file to state
                         state.add_pending_file(&filepath, regs.rdx as isize, regs.r10 as isize);
                     }
-                    Err(e) => error!(" - Could not get file path: {}", e),
+                    Err(e) => {
+                        desc = format!("{}\n{}", desc, format!(" - Could not get file path: {}", e));
+                    }
                 };
-                true
+                SyscallEntryResult::new(true, desc)
             }
             _ => {
-                trace!(
-                    "Unhandled syscall {:?} ({:X}, {:X}, {:X}, {:X}, {:X}, {:X})",
-                    state.syscall_id,
-                    regs.rdi,
-                    regs.rsi,
-                    regs.rdx,
-                    regs.r10,
-                    regs.r8,
-                    regs.r9
-                );
-                false
+                SyscallEntryResult::new(
+                    false, 
+                    format!(
+                        "Unhandled syscall {:?} ({:X}, {:X}, {:X}, {:X}, {:X}, {:X})",
+                        state.syscall_id,
+                        regs.rdi,
+                        regs.rsi,
+                        regs.rdx,
+                        regs.r10,
+                        regs.r8,
+                        regs.r9
+                    ),
+                )
             },
         }
     }

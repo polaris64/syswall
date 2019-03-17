@@ -12,7 +12,7 @@ pub trait PlatformHandler {
         state: &mut ProcessState,
         regs: &mut SyscallRegs,
         pid: Pid,
-    ) -> bool;
+    ) -> SyscallEntryResult;
     fn post(
         &self,
         state: &mut ProcessState,
@@ -20,4 +20,15 @@ pub trait PlatformHandler {
         pid: Pid,
     );
     fn update_regs_hard_block(&self, pid: Pid, regs: &mut SyscallRegs) -> Result<(), &'static str>;
+}
+
+pub struct SyscallEntryResult {
+    pub description: String,
+    pub handled: bool,
+}
+
+impl SyscallEntryResult {
+    pub fn new(handled: bool, description: String) -> Self {
+        Self { description, handled }
+    }
 }

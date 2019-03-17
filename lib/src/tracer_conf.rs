@@ -17,18 +17,12 @@ pub enum SyscallConfig {
 
 pub type SyscallConfigMap = HashMap<usize, SyscallConfig>;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct TracerConf {
     pub syscalls: SyscallConfigMap,
 }
 
 impl TracerConf {
-    pub fn new() -> Self {
-        Self {
-            syscalls: HashMap::new(),
-        }
-    }
-
     pub fn from_file(filename: &str) -> Result<Self, Box<std::error::Error>> {
         let path = Path::new(filename);
         let mut file = File::open(&path)?;
@@ -49,16 +43,13 @@ impl TracerConf {
     }
 }
 
+#[derive(Default)]
 pub struct RuntimeConf<'a> {
-    pub syscall_cb: Option<Box<Fn(SyscallQuery) -> UserResponse + 'a>>,
+    pub syscall_cb: Option<Box<Fn(SyscallQuery) -> Option<UserResponse> + 'a>>,
 }
 
 impl<'a> RuntimeConf<'a> {
-    pub fn new() -> Self {
-        Self { syscall_cb: None }
-    }
-
-    pub fn set_syscall_cb(&mut self, cb: Box<Fn(SyscallQuery) -> UserResponse + 'a>) {
+    pub fn set_syscall_cb(&mut self, cb: Box<Fn(SyscallQuery) -> Option<UserResponse> + 'a>) {
         self.syscall_cb = Some(cb);
     }
 }

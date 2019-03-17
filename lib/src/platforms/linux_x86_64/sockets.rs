@@ -1,4 +1,3 @@
-use log::{error, info};
 use nix::sys::socket;
 use nix::unistd::Pid;
 use std::ptr;
@@ -65,33 +64,36 @@ pub fn handle_connect_pre(
     state: &mut ProcessState,
     regs: &SyscallRegs,
     pid: Pid,
-) {
-    info!("Child process {} wants to connect socket {}", pid, regs.rdi);
+) -> String {
+    let mut desc = format!("Child process {} wants to connect socket {}", pid, regs.rdi);
     match child_process::get_child_buffer(pid, regs.rsi as usize, regs.rdx as usize) {
         Ok(buf) => {
             let sockaddr: Option<socket::SockAddr> = buf.into();
-            info!(" - Socket address: {:?}", sockaddr);
+            desc = format!("{}\n{}", desc, format!(" - Socket address: {:?}", sockaddr));
 
             // Update socket's address in state
             if let Some(ref mut sock) = state.socket_by_fd(regs.rdi as usize) {
                 sock.address = sockaddr;
             }
         },
-        Err(e) => error!(" - Unable to read from child process buffer: {}", e),
+        Err(e) => {
+            desc = format!("{}\n{}", desc, format!(" - Unable to read from child process buffer: {}", e));
+        }
     };
+    desc
 }
 
 pub fn handle_socket_pre(
     state: &mut ProcessState,
     regs: &SyscallRegs,
     pid: Pid,
-) {
-    info!(
+) -> String {
+    state.add_pending_socket(regs.rdi as isize, regs.rsi as isize, regs.rdx as isize);
+    format!(
         "Child process {} wants to create a socket (family: {:?}, type: {:?}, protocol: {:?})",
         pid,
         socket::AddressFamily::from_i32(regs.rdi as libc::c_int),
         SocketType::from_i32(regs.rsi as libc::c_int),
         SocketProtocol::from_i32(regs.rdx as libc::c_int),
-    );
-    state.add_pending_socket(regs.rdi as isize, regs.rsi as isize, regs.rdx as isize);
+    )
 }

@@ -32,34 +32,35 @@ fn main() -> Result<(), String> {
                         "Unable to read process configuration from file {}: {}",
                         filename, e
                     );
-                    TracerConf::new()
+                    TracerConf::default()
                 }
             },
-            None => TracerConf::new(),
+            None => TracerConf::default(),
         }
     } else {
-        TracerConf::new()
+        TracerConf::default()
     };
 
     // Build a RuntimeConf and create a syscall_cb closure to ask the user for decisions via stdin
     // when necessary.
-    let mut runtime_conf = RuntimeConf::new();
-    runtime_conf.set_syscall_cb(
-        Box::new(|_| {
-            app.get_user_input(UserResponse::AllowOnce).unwrap_or(UserResponse::AllowOnce)
-        })
-    );
+    let mut runtime_conf = RuntimeConf::default();
+    runtime_conf.set_syscall_cb(Box::new(|query| {
+        info!("{}", query.description);
+        match query.configured_choice {
+            None => Some(
+                app.get_user_input(UserResponse::AllowOnce)
+                    .unwrap_or(UserResponse::AllowOnce),
+            ),
+            Some(_) => None,
+        }
+    }));
 
     // Trace the process
-    let process_states = syswall::trace(
-        child_cmd,
-        &mut conf,
-        &runtime_conf,
-    )?;
+    let process_states = syswall::trace(child_cmd, &mut conf, &runtime_conf)?;
 
     // Print final report
     info!(
-        "{}",
+        "\n{}",
         process_states
             .0
             .iter()
