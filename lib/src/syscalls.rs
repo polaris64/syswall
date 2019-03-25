@@ -8,6 +8,8 @@ use crate::process_state::ProcessState;
 use crate::tracer_conf::{RuntimeConf, SyscallConfig, TracerConf};
 use crate::user_response::UserResponse;
 
+/// A single query caused by a syscall which contains all necessary details required to make a
+/// decision
 pub struct SyscallQuery<'a> {
     pub configured_choice: Option<&'a SyscallConfig>,
     pub id: usize,
@@ -17,6 +19,8 @@ pub struct SyscallQuery<'a> {
 }
 
 impl<'a> SyscallQuery<'a> {
+
+    /// Creates a new `SyscallQuery` based on a syscall event
     pub fn new(
         configured_choice: Option<&'a SyscallConfig>,
         id: usize,
@@ -34,6 +38,7 @@ impl<'a> SyscallQuery<'a> {
     }
 }
 
+/// Result of handling a syscall
 #[derive(Debug)]
 pub enum HandleSyscallResult {
     BlockedHard,
@@ -41,8 +46,10 @@ pub enum HandleSyscallResult {
     Unchanged,
 }
 
+/// Register state during a syscall
 pub type SyscallRegs = libc::user_regs_struct;
 
+/// Provides all necessary configuration for the tracer to handle syscalls from a tracee process
 pub struct SyscallHandler<'a> {
     config: &'a mut TracerConf,
     runtime_conf: &'a RuntimeConf<'a>,
@@ -59,6 +66,14 @@ impl<'a> SyscallHandler<'a> {
         }
     }
 
+    /// Called before a syscall is executed in order to obtain a decision and to modify the syscall
+    /// before execution as necessary.
+    ///
+    /// # Arguments
+    ///
+    ///   - `state`: `ProcessState` of the specific child process triggering the syscall
+    ///   - `pid`: child process ID
+    ///   - `regs`: CPU registers at the time of syscall invocation
     pub fn handle_pre_syscall(
         &mut self,
         state: &mut ProcessState,
@@ -80,6 +95,14 @@ impl<'a> SyscallHandler<'a> {
         }
     }
 
+    /// Called after a syscall is executed in order to update process states and to modify the
+    /// syscall return value that the child process will see if necessary.
+    ///
+    /// # Arguments
+    ///
+    ///   - `state`: `ProcessState` of the specific child process triggering the syscall
+    ///   - `pid`: child process ID
+    ///   - `regs`: CPU registers after syscall invocation
     pub fn handle_post_syscall(
         &self,
         state: &mut ProcessState,
@@ -89,6 +112,16 @@ impl<'a> SyscallHandler<'a> {
         self.platform_handler.post(state, regs, pid);
     }
 
+    /// Attempts to obtain a decision from the user for a syscall.  The user's choice is used if
+    /// available, otherwise either a configured choice (e.g. "always block") or a default
+    /// ("allow") is used.
+    ///
+    /// # Arguments
+    ///
+    ///   - `pid`: child process ID
+    ///   - `syscall_id`: ID of the syscall being triggered
+    ///   - `regs`: CPU registers prior to syscall invocation
+    ///   - `description`: a description of this syscall obtained from the current `PlatformHandler`
     fn syscall_choice(
         &mut self,
         pid: unistd::Pid,
@@ -143,6 +176,14 @@ impl<'a> SyscallHandler<'a> {
         }
     }
 
+    /// Processes a user's reponse to a syscall
+    ///
+    /// # Arguments
+    ///
+    ///   - `choice`: user's decision
+    ///   - `syscall_id`: ID of the syscall being triggered
+    ///   - `pid`: child process ID
+    ///   - `regs`: CPU registers which will be modified according to decision
     fn handle_user_response(
         &mut self,
         choice: UserResponse,
@@ -189,6 +230,13 @@ impl<'a> SyscallHandler<'a> {
         }
     }
 
+    /// Processes a pre-configured decision for a syscall
+    ///
+    /// # Arguments
+    ///
+    ///   - `syscall_conf`: the syscall's configuration
+    ///   - `pid`: child process ID
+    ///   - `regs`: CPU registers which will be modified according to decision
     fn handle_config_choice(
         &self,
         syscall_conf: Option<&SyscallConfig>,
@@ -225,6 +273,12 @@ impl<'a> SyscallHandler<'a> {
     }
 }
 
+/// Updates the syscall registers for a child process
+///
+/// # Arguments
+///
+///   - `pid`: child process ID
+///   - `regs`: updated CPU registers to be set
 pub fn update_registers(pid: unistd::Pid, regs: &SyscallRegs) -> Result<(), &'static str> {
     ptrace::setregs(pid, *regs).map_err(|_| "Unable to modify syscall registers")
 }

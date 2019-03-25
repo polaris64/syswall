@@ -9,11 +9,45 @@ use log::info;
 use nix::sys::ptrace;
 use nix::unistd;
 
+use crate::child_process::ProcessList;
 use crate::platforms::linux_x86_64::Handler;
 use crate::syscalls::SyscallHandler;
 use crate::tracer_conf::{RuntimeConf, TracerConf};
 
-pub fn trace(cmd: Vec<&str>, conf: &mut TracerConf, runtime_conf: &RuntimeConf) -> Result<child_process::ProcessList, String> {
+/// Main syswall tracing function: allows a child process to be executed and traced by syswall
+///
+/// [`ProcessList`]: ./child_process/struct.ProcessList.html
+/// [`RuntimeConf`]: ./tracer_conf/struct.RuntimeConf.html
+/// [`TracerConf`]: ./tracer_conf/struct.TracerConf.html
+///
+/// When called, the current process will fork and the child will execute `cmd`.  The parent will
+/// then enter the trace loop which processes the syscalls for the child (tracee) process.  When
+/// the child process terminates, this function will return.
+///
+/// # Arguments
+///
+///   - `cmd`: command and arguments used for running the child process (e.g. ["ls", "-l"])
+///   - `conf`: [`TracerConf`] instance which will be used and modified during the trace
+///   - `runtime_conf`: [`RuntimeConf`] instance which provides details of the runtime interface
+///
+/// # Returns
+///
+/// Upon success, returns an Ok([`ProcessList`]) containing the states of all tracee processes.
+///
+/// # Example
+///
+/// ```
+/// use syswall::trace;
+/// use syswall::tracer_conf::{RuntimeConf, TracerConf};
+///
+/// let cmd = vec!["ls", "-l"];
+/// let mut conf = TracerConf::default();
+/// let runtime_conf = RuntimeConf::default();
+/// if let Ok(process_states) = trace(cmd, &mut conf, &runtime_conf) {
+///     // Handle final process status reports
+/// }
+/// ```
+pub fn trace(cmd: Vec<&str>, conf: &mut TracerConf, runtime_conf: &RuntimeConf) -> Result<ProcessList, String> {
     let mut syscall_handler = SyscallHandler::new(
         conf, runtime_conf, Box::new(Handler::new()),
     );
@@ -60,7 +94,7 @@ pub fn trace(cmd: Vec<&str>, conf: &mut TracerConf, runtime_conf: &RuntimeConf) 
         }
         unistd::ForkResult::Child => {
             child_process::exec_child(cmd).map_err(|_| "Unable to execute child process")?;
-            Ok(child_process::ProcessList::default())
+            Ok(ProcessList::default())
         }
     }
 }

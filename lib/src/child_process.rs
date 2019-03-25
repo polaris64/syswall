@@ -13,11 +13,12 @@ use std::sync::Arc;
 use crate::process_state::{ProcessState, ProcessTraceState, ProcessType};
 use crate::syscalls;
 
+/// Mapping of PID to `ProcessState`
 #[derive(Default)]
 pub struct ProcessList(pub HashMap<Pid, ProcessState>);
 
 impl ProcessList {
-    /// Returns a flag which is set if all processes are of type ClonedThread
+    /// Returns a flag which is set if all processes are of type `ClonedThread`
     pub fn all_threads(&self, tracee_pid: Pid) -> bool {
         self.0.iter().all(|(pid, child_state)| {
             *pid == tracee_pid
@@ -28,7 +29,7 @@ impl ProcessList {
         })
     }
 
-    /// Returns a flag which is set if all processes are Terminated
+    /// Returns a flag which is set if all processes are `Terminated`
     pub fn all_terminated(&self) -> bool {
         self.0.values().map(|x| &x.trace_state).all(|x| match x {
             ProcessTraceState::Terminated(_) => true,
@@ -37,22 +38,25 @@ impl ProcessList {
     }
 }
 
+/// A copy of a chunk of memory read from a child process's virtual memory
 #[derive(Debug)]
 pub struct ChildProcessBuffer(pub Vec<u8>);
 
 impl From<ChildProcessBuffer> for String {
+
+    /// Converts the `ChildProcessBuffer` String, interpreting the buffer as UTF-8
     fn from(b: ChildProcessBuffer) -> String {
         String::from_utf8_lossy(&b.0).into_owned()
     }
 }
 
-/// Reads a given amount child process memory into a ChildProcessBuffer
+/// Reads a given amount child process memory into a `ChildProcessBuffer`
 ///
 /// # Arguments
 ///
-///   - pid: PID of the target child process
-///   - base: base VM address for read
-///   - len: length (in bytes) of read
+///   - `pid`: PID of the target child process
+///   - `base`: base VM address for read
+///   - `len`: length (in bytes) of read
 pub fn get_child_buffer(
     pid: Pid,
     base: usize,
@@ -69,12 +73,12 @@ pub fn get_child_buffer(
     Ok(ChildProcessBuffer(rbuf))
 }
 
-/// Reads a null-terminated string from child process memory into a ChildProcessBuffer
+/// Reads a null-terminated string from child process memory into a `ChildProcessBuffer`
 ///
 /// # Arguments
 ///
-///   - pid: PID of the target child process
-///   - base: base VM address for read
+///   - `pid`: PID of the target child process
+///   - `base`: base VM address for read
 pub fn get_child_buffer_cstr(pid: Pid, base: usize) -> Result<String, &'static str> {
     let mut final_buf: Vec<u8> = Vec::with_capacity(255);
 
@@ -119,13 +123,13 @@ pub fn get_child_buffer_cstr(pid: Pid, base: usize) -> Result<String, &'static s
     }
 }
 
-/// Executes a child process under ptrace using execvp.
+/// Executes a child process under ptrace using `execvp`.
 ///
 /// Should be called by the tracer child process after forking.
 ///
-/// Arguments
+/// # Arguments
 ///
-///   - cmd: command ard argv for execvp()
+///   - `cmd`: command argv for `execvp()` call
 pub fn exec_child(cmd: Vec<&str>) -> Result<(), String> {
     ptrace::traceme()
         .map_err(|_| "CHILD: could not enable tracing by parent (PTRACE_TRACEME failed)")?;
@@ -152,10 +156,10 @@ pub fn exec_child(cmd: Vec<&str>) -> Result<(), String> {
 ///
 /// Will block until an event is ready unless `nohang` is set
 ///
-/// Arguments
+/// # Arguments
 ///
-///   - pid: child process PID, or -1 to wait for all child processes
-///   - nohang: if set, function will not block if all child processes are running
+///   - `pid`: child process PID, or -1 to wait for all child processes
+///   - `nohang`: if set, function will not block if all child processes are running
 pub fn wait_child(pid: Pid, nohang: bool) -> Result<nix::sys::wait::WaitStatus, String> {
     if nohang {
         wait::waitpid(
@@ -171,11 +175,11 @@ pub fn wait_child(pid: Pid, nohang: bool) -> Result<nix::sys::wait::WaitStatus, 
 
 /// Handles a syscall ptrace event for a child process
 ///
-/// Arguments
+/// # Arguments
 ///
-///   - child: ProcessState of the child process receiving the event
-///   - pid: PID of the child process receiving the event
-///   - syscall_handler: current syscall handler
+///   - `child`: `ProcessState` of the child process receiving the event
+///   - `pid`: PID of the child process receiving the event
+///   - `syscall_handler`: current syscall handler
 fn handle_pid_syscall(
     child: &mut ProcessState,
     pid: Pid,
@@ -257,11 +261,11 @@ fn handle_pid_syscall(
 
 /// Handles a stopped ptrace event for a child process
 ///
-/// Arguments
+/// # Arguments
 ///
-///   - child: ProcessState of the child process receiving the event
-///   - pid: PID of the child process receiving the event
-///   - sig: specific signal received by child process
+///   - `child`: `ProcessState` of the child process receiving the event
+///   - `pid`: PID of the child process receiving the event
+///   - `sig`: specific signal received by child process
 fn handle_pid_stop(child: &mut ProcessState, pid: Pid, sig: signal::Signal) {
     if let signal::Signal::SIGTERM = sig {
         info!("SIGTERM received for PID {:?}", pid);
@@ -271,13 +275,13 @@ fn handle_pid_stop(child: &mut ProcessState, pid: Pid, sig: signal::Signal) {
     };
 }
 
-/// Handles all WaitStatus types returned by wait_child() for a specific child process
+/// Handles all `WaitStatus` types returned by `wait_child()` for a specific child process
 ///
-/// Arguments
+/// # Arguments
 ///
-///   - wait_status: status returned by wait_child()
-///   - processes: ProcessList which can be modified if the child cloned/forked.
-///   - syscall_handler: current syscall handler
+///   - `wait_status`: status returned by `wait_child()`
+///   - `processes`: `ProcessList` which can be modified if the child cloned/forked.
+///   - `syscall_handler`: current syscall handler
 fn handle_wait_status(
     wait_status: &wait::WaitStatus,
     processes: &mut ProcessList,
@@ -445,10 +449,10 @@ fn handle_wait_status(
 
 /// Initiates and runs the main tracer loop on a child (tracee) PID
 ///
-/// Arguments
+/// # Arguments
 ///
-///   - tracee_pid: PID of the main tracee process (which should have been executed via exec_child())
-///   - syscall_handler: current syscall handler
+///   - `tracee_pid`: PID of the main tracee process (which should have been executed via `exec_child()`)
+///   - `syscall_handler`: current syscall handler
 pub fn child_loop(tracee_pid: Pid, syscall_handler: &mut syscalls::SyscallHandler) -> Result<ProcessList, String> {
     let mut processes: ProcessList = ProcessList::default();
 

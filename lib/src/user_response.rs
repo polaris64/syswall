@@ -1,3 +1,4 @@
+/// A response to a decision about a single syscall obtained from the user
 pub enum UserResponse {
     AllowAllSyscall,
     AllowOnce,
@@ -11,6 +12,8 @@ pub enum UserResponse {
 }
 
 impl From<&str> for UserResponse {
+
+    /// Converts a command-line user input to a `UserResponse`
     fn from(s: &str) -> Self {
         match s {
             "a" => UserResponse::AllowOnce,
@@ -27,6 +30,8 @@ impl From<&str> for UserResponse {
 }
 
 impl From<&UserResponse> for String {
+
+    /// Converts a `UserResponse` to the equivalent command-line input
     fn from(x: &UserResponse) -> Self {
         match x {
             UserResponse::AllowOnce => String::from("a"),
