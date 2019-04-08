@@ -1,8 +1,15 @@
 [package]
 name = "syswall_cli"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Simon Pugnet <simon@polaris64.net>"]
 edition = "2018"
+description = "syswall_cli: a simple CLI to syswall"
+keywords = ["linux", "syscalls", "security", "analysis", "tracing"]
+categories = ["command-line-utilities", "development-tools::debugging", "os::unix-apis"]
+license = "LGPL-3.0-only"
+repository = "https://github.com/polaris64/syswall"
+homepage = "https://www.polaris64.net/blog/programming/2019/syswall-a-firewall-for-syscalls"
+maintenance = { status = "experimental" }
 
 [dependencies]
 clap = "2.32.0"
@@ -10,6 +17,7 @@ log = "0.4.6"
 
 [dependencies.syswall]
 path = "../lib"
+version = "0.3.0"
 
 [[bin]]
 name = "syswall_cli"
