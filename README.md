@@ -16,6 +16,17 @@ This repository is split as a Cargo workspace into two separate projects: -
 
 The project has been split in this way in order to allow for easier integration of other interfaces.  For example, a graphical, web-based or scripting interface could easily be written for the `syswall` library allowing for usage in environments other than the command-line.
 
+## Installation
+If you just want to use the CLI, the simplest method of installation is to use `cargo install`: -
+
+```
+cargo install syswall_cli
+```
+
+This will download the latest version of `syswall_cli` and all dependencies, build them and install them to your local Cargo binary directory.  As long as this directory is in your path, you can now simply run `syswall_cli` on the command-line.
+
+This method requires you to have installed the Rust toolchain.  If you haven't already done this, please follow [these official instructions](https://rustup.rs/) to do so.
+
 ## Current progress
 `syswall` is a very early prototype and as such only a small amount of the planned functionality is currently implemented.
 
