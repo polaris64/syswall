@@ -1,4 +1,5 @@
-# syswall
+# ![syswall](syswall-logo-sm.png)
+
 A work in progress firewall for Linux syscalls, written in Rust.
 
 ## Introduction
