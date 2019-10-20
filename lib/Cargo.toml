@@ -1,6 +1,6 @@
 [package]
 name = "syswall"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Simon Pugnet <simon@polaris64.net>"]
 edition = "2018"
 description = "syswall: a firewall for syscalls"
