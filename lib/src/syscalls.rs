@@ -53,12 +53,12 @@ pub type SyscallRegs = libc::user_regs_struct;
 pub struct SyscallHandler<'a> {
     config: &'a mut TracerConf,
     runtime_conf: &'a RuntimeConf<'a>,
-    platform_handler: Box<PlatformHandler>,
+    platform_handler: Box<dyn PlatformHandler>,
 }
 
 impl<'a> SyscallHandler<'a> {
 
-    pub fn new(config: &'a mut TracerConf, runtime_conf: &'a RuntimeConf<'a>, platform_handler: Box<PlatformHandler>) -> Self {
+    pub fn new(config: &'a mut TracerConf, runtime_conf: &'a RuntimeConf<'a>, platform_handler: Box<dyn PlatformHandler>) -> Self {
         Self {
             config,
             runtime_conf,

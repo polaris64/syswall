@@ -31,7 +31,7 @@ pub struct TracerConf {
 
 impl TracerConf {
     /// Loads the `TracerConf` from a JSON file
-    pub fn from_file(filename: &str) -> Result<Self, Box<std::error::Error>> {
+    pub fn from_file(filename: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let path = Path::new(filename);
         let mut file = File::open(&path)?;
         let mut ser = String::new();
@@ -45,7 +45,7 @@ impl TracerConf {
     }
 
     /// Saves the `TracerConf` to a JSON file
-    pub fn write_to_file(&self, filename: &str) -> Result<(), Box<std::error::Error>> {
+    pub fn write_to_file(&self, filename: &str) -> Result<(), Box<dyn std::error::Error>> {
         let ser: String = serde_json::to_string(self)?;
         let path = Path::new(filename);
         let mut file = File::create(&path)?;
@@ -60,13 +60,13 @@ impl TracerConf {
 /// [`UserResponse`]: ../user_response/enum.UserResponse.html
 #[derive(Default)]
 pub struct RuntimeConf<'a> {
-    pub syscall_cb: Option<Box<Fn(SyscallQuery) -> Option<UserResponse> + 'a>>,
+    pub syscall_cb: Option<Box<dyn Fn(SyscallQuery) -> Option<UserResponse> + 'a>>,
 }
 
 impl<'a> RuntimeConf<'a> {
 
     /// Assigns the callback function reference
-    pub fn set_syscall_cb(&mut self, cb: Box<Fn(SyscallQuery) -> Option<UserResponse> + 'a>) {
+    pub fn set_syscall_cb(&mut self, cb: Box<dyn Fn(SyscallQuery) -> Option<UserResponse> + 'a>) {
         self.syscall_cb = Some(cb);
     }
 
