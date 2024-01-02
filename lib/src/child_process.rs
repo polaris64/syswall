@@ -297,7 +297,7 @@ fn handle_wait_status(
         // Handle exit of a child process
         wait::WaitStatus::Exited(pid, code) => {
             info!("Child process {:?} exited with code {}", pid, code);
-            let mut child = processes.0.get_mut(&pid).ok_or_else(|| format!(
+            let child = processes.0.get_mut(&pid).ok_or_else(|| format!(
                 "Child process {:?} exited, however this process is not in the process list",
                 pid
             ))?;
@@ -415,7 +415,7 @@ fn handle_wait_status(
                 ptrace::syscall(*pid).map_err(|_| {
                     format!("Unable to start new PID {:?} for syscall entry wait", pid)
                 })?;
-            } else if let Some(mut child) = processes.0.get_mut(&pid) {
+            } else if let Some(child) = processes.0.get_mut(&pid) {
                 if child.trace_state == ProcessTraceState::Created {
                     // If process has already been created via a WaitStatus::PtraceEvent, start it
                     // via ptrace::syscall() and change its ProcessTraceState.
